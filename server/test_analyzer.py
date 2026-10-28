@@ -14,7 +14,9 @@ class T(unittest.TestCase):
     def test_posts(self):
         for c in CASES:
             with self.subTest(text=c["t"]):
-                e = an.analyze_post(c["t"], "kremenchuk", c["d"])
+                ch = c.get("ch")
+                remote = bool(ch) and not an.channel_is_local(ch, "kremenchuk")
+                e = an.analyze_post(c["t"], "kremenchuk", c["d"], remote)
                 self.assertEqual(e.level, _LV[c["lvl"]])
                 if c.get("near") is not None:
                     self.assertEqual(e.near, c["near"])
@@ -31,6 +33,35 @@ class T(unittest.TestCase):
         posts[0]["ts"] = now - 12 * 60   # балістика «хз звідки» живе 10 хв
         lvl, best, ev = an.analyze_feed(posts, "kremenchuk", "molod", now)
         self.assertEqual(lvl, an.GREEN); self.assertTrue(ev.far)
+
+    def test_multi_dedupe_confidence(self):
+        now = 1_800_000_000
+        feeds = {"kremen_sv": [{"id": 1, "ts": now - 120, "text": "Шахед над Глобино"}],
+                 "kudy_letyt": [{"id": 5, "ts": now - 60, "text": "шахед в районі Глобиного"}],
+                 "war_monitor": [{"id": 9, "ts": now - 30, "text": "Шахеды на Одессу"}]}
+        lvl, best, ev, cl = an.analyze_multi(feeds, "kremenchuk", "molod", now)
+        self.assertEqual(lvl, an.YELLOW)
+        glob = [c for c in cl if c["n"] == 2]
+        self.assertEqual(len(glob), 1)
+        self.assertGreater(glob[0]["conf"], 0.9)
+        self.assertIn("2 канали", ev.reasons)
+
+    def test_multi_local_clear_wins(self):
+        now = 1_800_000_000
+        feeds = {"kudy_letyt": [{"id": 1, "ts": now - 300, "text": "шахед над Глобино"}],
+                 "kremen_sv": [{"id": 2, "ts": now - 60, "text": "Відбій, чисто"}],
+                 "war_monitor": [{"id": 3, "ts": now - 30, "text": "відбій"}]}
+        self.assertEqual(an.analyze_multi(feeds, "kremenchuk", "molod", now)[0], an.GREEN)
+        # «відбій» з загальнонаціонального каналу НЕ скасовує
+        feeds = {"kremen_sv": [{"id": 1, "ts": now - 300, "text": "Шахед над Молодіжним"}],
+                 "war_monitor": [{"id": 3, "ts": now - 30, "text": "відбій"}]}
+        self.assertEqual(an.analyze_multi(feeds, "kremenchuk", "molod", now)[0], an.YELLOW)
+
+    def test_default_channels(self):
+        d = an.default_channels("kremenchuk")
+        self.assertEqual(d[0], "kremen_sv")
+        self.assertIn("kpszsu", d)
+        self.assertNotIn("synegubov", d)
 
     def test_feed_clear_resets(self):
         now = 1_800_000_000

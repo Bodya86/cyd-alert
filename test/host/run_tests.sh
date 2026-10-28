@@ -7,11 +7,11 @@ python3 - <<'PY'
 import json
 L = {"green": "LVL_GREEN", "yellow": "LVL_YELLOW", "red": "LVL_RED"}
 b = lambda v: -1 if v is None else int(v)
-out = ["// згенеровано з test/analyzer_cases.json (run_tests.sh)", "struct Case { const char* t; const char* d; Level l; int near, far, ow; };",
+out = ["// згенеровано з test/analyzer_cases.json (run_tests.sh)", "struct Case { const char* t; const char* d; Level l; int near, far, ow; const char* ch; };",
        "static const Case CASES[] = {"]
 for c in json.load(open("../analyzer_cases.json", encoding="utf-8")):
-    out.append("  {%s, %s, %s, %d, %d, %d}," % (json.dumps(c["t"], ensure_ascii=False), json.dumps(c["d"]), L[c["lvl"]],
-                                               b(c.get("near")), b(c.get("far")), b(c.get("ow"))))
+    out.append("  {%s, %s, %s, %d, %d, %d, %s}," % (json.dumps(c["t"], ensure_ascii=False), json.dumps(c["d"]), L[c["lvl"]],
+                                               b(c.get("near")), b(c.get("far")), b(c.get("ow")), json.dumps(c.get("ch", ""))))
 out.append("};")
 open("cases_gen.h", "w", encoding="utf-8").write("\n".join(out) + "\n")
 PY

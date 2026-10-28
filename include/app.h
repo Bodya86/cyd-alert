@@ -17,7 +17,10 @@ struct Settings {
   String ssid, pass;
   String token;        // alerts.in.ua
   String server;       // companion server base url
-  String channel;      // telegram channel (без @), порожньо = за містом
+  String channel;      // додатковий власний telegram-канал (без @), порожньо — немає
+  String ghToken;      // необов'язковий GitHub token (read-only) — швидше опитування api.github.com (5000/год замість 60)
+  uint32_t chOn = 0;   // увімкнені канали з CHANNELS (біт i), якщо chCustom
+  bool chCustom = false; // false — типові канали для вашої області
   int8_t oblast = -1;  // індекс у OBLASTS
   int16_t city = -1;   // індекс у CITIES, -1 = вся область
   int16_t district = -1; // індекс у CITIES[city].districts, -1 = все місто
@@ -37,7 +40,10 @@ void settingsSave();
 void settingsReset();
 const CityDef* userCity();
 const DistrictDef* userDistrict();
-String userChannel();
+String userChannel();      // основний канал (власний або міський) — для підписів
+bool channelEnabled(int i); // канал CHANNELS[i] увімкнено (власний вибір або типовий для області)
+void channelSetEnabled(int i, bool on);
+int channelsEnabledCount();
 String userPlaceName();   // "Кременчук · Молодіжний"
 
 // ------------------------------- Пости Telegram -------------------------------
@@ -83,6 +89,9 @@ struct AppState {
   bool tgOk = false;
   uint32_t tgAt = 0;
   const char* tgSrc = "—";
+  char tgChan[32] = {0};            // канал найважливішого посту
+  uint8_t tgNch = 0, tgNok = 0;     // каналів увімкнено / прочитано успішно
+  uint8_t tgAgree = 0;              // скільки каналів підтверджують подію
 
   Level offLevel = LVL_GREEN;       // офіційна тривога у вашому районі: жовтий (дрони/невідомо) / червоний (ракети)
   bool offPartial = false;          // тривога лише в частині району (громади)
@@ -118,6 +127,8 @@ void notifyTest(Level l);
 
 void netStart();             // запуск фонової задачі (core 0)
 void netForceRefresh();
+int netChannelStatus(int i, Level* lvl);   // 0 — ще не читали, 1 — ок, 2 — помилка (i = CHANNEL_COUNT — власний канал)
+const char* netCloudSrc();                 // "GitHub API" / "GitHub raw" / "Pages" / "—"
 void netOutageRefresh();     // перечитати графік відключень (змінилась черга/режим)
 
 void uiInit();

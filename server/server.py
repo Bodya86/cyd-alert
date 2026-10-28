@@ -18,6 +18,7 @@
 Дані тривог: JAAM (jaam.net.ua) — потрібна атрибуція «Дані: JAAM (jaam.net.ua)».
 """
 import json, math, os, sys, threading, time, traceback, urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -52,7 +53,18 @@ trk = tk.Tracker()
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
-CITY_BY_CHANNEL = {c.get("channel"): c for c in an.LOC["cities"] if c.get("channel")}
+CITY_BY_CHANNEL = {c["channel"].lower(): c for c in an.LOC["cities"] if c.get("channel")}
+for _c in an.CHANNELS_CFG:          # data/channels.json: «домашнє» місто каналу (для трекера); national → None
+    _home = an.CITIES.get(_c.get("home")) if _c.get("home") else None
+    if _home:
+        CITY_BY_CHANNEL[_c["id"].lower()] = _home
+    elif _c["id"].lower() not in CITY_BY_CHANNEL:
+        CITY_BY_CHANNEL[_c["id"].lower()] = None
+
+
+def home_city(ch):
+    """Місто-«дім» каналу для трекера. Для обласних каналів без home — обласний центр не вгадуємо (None)."""
+    return CITY_BY_CHANNEL.get((ch or "").lower())
 
 
 def log(*a):
@@ -193,7 +205,7 @@ def feed_tracker_alerts(rs):
 
 
 def feed_tracker_posts(ch, posts):
-    city = CITY_BY_CHANNEL.get(ch)
+    city = home_city(ch)
     now = time.time()
     with trk_lock:
         for p in sorted(posts, key=lambda x: x.get("ts", 0)):
@@ -309,16 +321,55 @@ def get_posts(ch):
         return list(c["posts"]), c["at"], c["err"]
 
 
+def channels_for(q):
+    """?channels=a,b,c — явний список; інакше типові для міста/області + ?channel= (власний)."""
+    city = q.get("city") or None
+    oblast = int(q["oblast"]) if q.get("oblast", "").lstrip("-").isdigit() else None
+    if q.get("channels"):
+        chs = [c.strip().lstrip("@") for c in q["channels"].split(",") if c.strip()]
+    else:
+        chs = an.default_channels(city, oblast)
+    if q.get("channel"):
+        extra = q["channel"].strip().lstrip("@")
+        if extra.lower() not in [c.lower() for c in chs]:
+            chs.insert(0, extra)
+    return chs[:24]
+
+
+def get_many(chs):
+    """Пости кількох каналів паралельно → ({ch: posts}, найстаріший at, {ch: err})."""
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        res = list(ex.map(get_posts, chs))
+    feeds = {ch: r[0] for ch, r in zip(chs, res)}
+    errs = {ch: r[2] for ch, r in zip(chs, res) if r[2]}
+    ats = [r[1] for r in res if r[1]]
+    return feeds, (min(ats) if ats else 0), errs
+
+
+def tg_summary(feeds, city, district, now=None):
+    lvl, best, ev, clusters = an.analyze_multi(feeds, city, district, now)
+    bc = None
+    if best:
+        bc = next((c for c in clusters if c.get("best") and c["best"][0].get("id") == best.get("id")
+                   and c["best"][2] == best.get("channel")), None)
+    return lvl, best, ev, {"agree": (bc or {}).get("n", 0), "conf": (bc or {}).get("conf", 0),
+                           "events": [{"type": c["key"][0], "place": c["key"][1], "channels": sorted(c["channels"]),
+                                       "conf": c["conf"], "ts": int(c["ts"])}
+                                      for c in sorted(clusters, key=lambda c: -c["ts"]) if c.get("best")][:8]}
+
+
 # ---------- API ----------
 def state(q):
     city = q.get("city") or None
     district = q.get("district") or None
     cdef = an.CITIES.get(city) if city else None
-    ch = q.get("channel") or (cdef or {}).get("channel") or ""
     oblast = int(q["oblast"]) if q.get("oblast", "").lstrip("-").isdigit() else (cdef or {}).get("oblast", -1)
 
-    posts, at, err = get_posts(ch) if ch else ([], 0, None)
-    lvl, best, ev = an.analyze_feed(posts, city, district)
+    chs = channels_for(q)
+    feeds, at, errs = get_many(chs) if chs else ({}, 0, {})
+    lvl, best, ev, multi = tg_summary(feeds, city, district)
+    ch = (best or {}).get("channel") or (chs[0] if chs else "")
+    err = "; ".join(f"{k}: {v}" for k, v in errs.items()) or None
     with lock:
         obl = alerts["oblasts"]
         rs = alerts["regions"]
@@ -354,6 +405,10 @@ def state(q):
         "post": (best or {}).get("id", 0),
         "reason": ev.reason,
         "channel": ch,
+        "channels": chs,
+        "agree": multi["agree"],
+        "conf": multi["conf"],
+        "events": multi["events"],
         "tg_at": int(at),
         "tg_err": err,
         "oblasts": obl,
@@ -377,15 +432,30 @@ def state(q):
     }
 
 
-def posts_api(q):
-    ch = q.get("channel") or "kremen_sv"
-    posts, at, err = get_posts(ch)
+def eval_posts(ch, posts, city, district):
+    remote = not an.channel_is_local(ch, city)
     out = []
     for p in posts:
-        e = an.analyze_post(p["text"], q.get("city") or None, q.get("district") or None)
-        out.append({**p, "level": an.LEVEL_NAMES[e.level], "score": e.score, "kind": e.kind, "near": e.near, "reason": e.reason,
-                    "ignored": e.ignored, "clear": e.clear})
-    return {"channel": ch, "at": int(at), "err": err, "posts": out}
+        e = an.analyze_post(p["text"], city, district, remote)
+        out.append({**p, "channel": ch, "level": an.LEVEL_NAMES[e.level], "score": e.score, "kind": e.kind, "near": e.near,
+                    "reason": e.reason, "ignored": e.ignored, "clear": e.clear, "local": e.local})
+    return out
+
+
+def posts_api(q):
+    """?channel=x — один канал; без нього — стрічка всіх типових каналів (новіші зверху після сортування клієнтом)."""
+    city, district = q.get("city") or None, q.get("district") or None
+    if q.get("channel") and not q.get("channels"):
+        ch = q["channel"]
+        posts, at, err = get_posts(ch)
+        return {"channel": ch, "at": int(at), "err": err, "posts": eval_posts(ch, posts, city, district)}
+    chs = channels_for(q)
+    feeds, at, errs = get_many(chs)
+    out = []
+    for ch, posts in feeds.items():
+        out += eval_posts(ch, posts[-8:], city, district)
+    out.sort(key=lambda p: p.get("ts") or 0)
+    return {"channel": ",".join(chs), "channels": chs, "at": int(at), "err": errs or None, "posts": out[-60:]}
 
 
 DASH = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">
@@ -404,12 +474,12 @@ c.onchange=()=>{fd();go()};d.onchange=go;fd();
 const t=s=>s?new Date(s*1000).toLocaleTimeString('uk'):'—';
 async function go(){const q=`city=${c.value}&district=${d.value}`;
  const s=await (await fetch('/api/state?'+q)).json();
- document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Дрони',red:'🔴 Ракети'}[s.final]}</b> (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel} · тривоги: ${s.oblasts_src||'—'}</span></div>`;
+ document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Дрони',red:'🔴 Ракети'}[s.final]}</b> (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel}${s.agree>1?' · підтверджують '+s.agree+' канали':''} · ${(s.channels||[]).length} каналів · тривоги: ${s.oblasts_src||'—'}</span></div>`;
  const g=await (await fetch('/api/targets?'+q)).json();const S=g.summary;
  document.getElementById('tg').innerHTML=`<div class=card style="border-color:#58a6ff"><b>🎯 Цілі (${g.targets.length})</b> · P(≤${g.user?g.user.R:15} км, 30 хв): дрони ${Math.round(S.p_drone[30]*100)}%, ракети ${Math.round(S.p_missile[30]*100)}%${S.eta_min!=null?' · ETA '+Math.round(S.eta_min)+' хв':''}<br>`+
   g.targets.map(x=>`<span class=mut>${x.label}${x.count>1?' ×'+x.count:''} · ${x.dist_km!=null?x.dist_km+' км':'—'} · курс ${x.heading!=null?x.heading+'°':'—'} (${Math.round(x.heading_conf*100)}%) · ${x.speed} км/год · P5/15/30 ${[5,15,30].map(T=>Math.round(x.p[T]*100)).join('/')}% · ETA ${x.eta_min??'—'} · ${x.src.join(',')}</span>`).join('<br>')+`<div class=mut>${g.attribution}</div></div>`;
- const p=await (await fetch('/api/posts?channel='+s.channel+'&'+q)).json();
- document.getElementById('ps').innerHTML=p.posts.slice().reverse().map(x=>`<div class="card ${x.level}"><span class=mut>#${x.id} · ${t(x.ts)} · бал ${x.score} ${x.ignored?'· реклама':''}${x.clear?'· відбій':''} ${x.reason}</span><br>${x.text}</div>`).join('')}
+ const p=await (await fetch('/api/posts?'+q)).json();
+ document.getElementById('ps').innerHTML=p.posts.slice().reverse().map(x=>`<div class="card ${x.level}"><span class=mut>@${x.channel} #${x.id} · ${t(x.ts)} · бал ${x.score} ${x.ignored?'· реклама':''}${x.clear?'· відбій':''} ${x.reason}</span><br>${x.text}</div>`).join('')}
 const OC=['#2ea043','#5b6573','#f59e0b'];
 async function outg(){const ci=L.cities.find(x=>x.id==c.value);const o=await (await fetch(`/api/outage?oblast=${ci.oblast}&group=${document.getElementById('g').value}`)).json();
  document.getElementById('ob').innerHTML=(o.days||[]).map(dd=>`<div class=mut>${dd.date}</div><div style="display:flex;gap:1px">${[...dd.cells].map(v=>`<span style="flex:1;height:14px;background:${OC[v]}"></span>`).join('')}</div>`).join('')||('— '+(o.err||''));

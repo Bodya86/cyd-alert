@@ -370,5 +370,68 @@
   "near": null,
   "far": false,
   "ow": false
+ },
+ {
+  "t": "БпЛА на Полтавщині курсом на Кременчук",
+  "d": "molod",
+  "lvl": "yellow",
+  "ch": "kpszsu"
+ },
+ {
+  "t": "Група ударних БпЛА на півночі Полтавщини",
+  "d": "molod",
+  "lvl": "yellow",
+  "ch": "kpszsu"
+ },
+ {
+  "t": "Шахеды на Одессу",
+  "d": "molod",
+  "lvl": "green",
+  "ch": "war_monitor",
+  "near": false
+ },
+ {
+  "t": "Балістика!",
+  "d": "molod",
+  "lvl": "green",
+  "ch": "kpszsu",
+  "ow": false
+ },
+ {
+  "t": "Ракета на Дніпро",
+  "d": "molod",
+  "lvl": "green",
+  "ch": "war_monitor"
+ },
+ {
+  "t": "Відбій загрози",
+  "d": "molod",
+  "lvl": "green",
+  "ch": "war_monitor"
+ },
+ {
+  "t": "шахед над Глобино",
+  "d": "molod",
+  "lvl": "yellow",
+  "ch": "kudy_letyt"
+ },
+ {
+  "t": "Балістика на Полтавщину",
+  "d": "molod",
+  "lvl": "red",
+  "ch": "war_monitor"
+ },
+ {
+  "t": "Бублистика хз откуда",
+  "d": "molod",
+  "lvl": "red",
+  "ch": "kremen_sv",
+  "ow": true
+ },
+ {
+  "t": "Балістика з півночі",
+  "d": "molod",
+  "lvl": "red",
+  "ch": "ppo_poltava"
  }
 ]

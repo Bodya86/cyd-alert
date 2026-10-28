@@ -1,0 +1,41 @@
+# «Живі» дані CYD Alert: один довгий job (~5 год 50 хв) з циклом раз на ~60 с.
+#  * тримає JAAM WebSocket підключеним, читає всі Telegram-канали з data/channels.json, рахує трекер;
+#  * публікує api/*.json у гілку `data` (один коміт без історії, force-push) — ESP читає її через
+#    api.github.com (ETag/304, CDN max-age=60) або raw.githubusercontent.com (кеш до 5 хв);
+#  * cron кожні 15 хв лише «підхоплює» роботу, якщо попередній job завершився/впав:
+#    concurrency не дає запустити другий паралельно (один працює + один чекає в черзі).
+# Перший запуск: Actions → live → Run workflow. Якщо push дає 403 —
+#   Settings → Actions → General → Workflow permissions → «Read and write permissions».
+name: live
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Live loop (publish to data branch)
+        env:
+          TZ: Europe/Kyiv
+          UKRAINEALARM_KEY: ${{ secrets.UKRAINEALARM_KEY }}
+          ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
+        run: python server/live.py --out public --minutes 350 --interval 60 --branch data --push

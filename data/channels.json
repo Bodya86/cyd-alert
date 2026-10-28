@@ -1,0 +1,283 @@
+{
+ "_comment": "Публічні канали з веб-превʼю t.me/s/<id> (перевірено curl 28.10.2026). scope: national — уся Україна (діє правило відстані, без згадки вашого міста/області пост лише інформаційний); oblast — канал області(ей) з oblasts; city — міський канал (home). weight 0..1 — довіра. default — увімкнений за замовчуванням для користувачів своєї області (national — для всіх). Для ESP порядок важливий (бітова маска налаштувань) — нові канали додавайте В КІНЕЦЬ.",
+ "channels": [
+  {
+   "id": "kremen_sv",
+   "name": "Кременчуцький Миколай",
+   "scope": "city",
+   "oblasts": [
+    16
+   ],
+   "home": "kremenchuk",
+   "weight": 0.9,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "ppo_poltava",
+   "name": "ППО Полтавщина: Нічні мисливці",
+   "scope": "oblast",
+   "oblasts": [
+    16
+   ],
+   "home": null,
+   "weight": 0.75,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "poltavskaODA",
+   "name": "Полтавська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    16
+   ],
+   "home": "poltava",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "kremenchuk_info",
+   "name": "Кременчук ⚡️INFO",
+   "scope": "city",
+   "oblasts": [
+    16
+   ],
+   "home": "kremenchuk",
+   "weight": 0.5,
+   "kind": "news",
+   "default": false
+  },
+  {
+   "id": "poltava_monitor",
+   "name": "Полтава І Моніторинг",
+   "scope": "oblast",
+   "oblasts": [
+    16
+   ],
+   "home": "poltava",
+   "weight": 0.55,
+   "kind": "monitor",
+   "default": false
+  },
+  {
+   "id": "kpszsu",
+   "name": "Повітряні Сили ЗСУ",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 1.0,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "war_monitor",
+   "name": "monitor",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.8,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "kudy_letyt",
+   "name": "Ринда моніторить",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.75,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "raketa_trevoga",
+   "name": "Чому тривога | Радар",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.7,
+   "kind": "monitor",
+   "default": false
+  },
+  {
+   "id": "eRadarrua",
+   "name": "єРадар",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.65,
+   "kind": "monitor",
+   "default": false
+  },
+  {
+   "id": "mon1tor_ua",
+   "name": "ППО радар | Напрямок ракет",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.6,
+   "kind": "monitor",
+   "default": false
+  },
+  {
+   "id": "vanek_nikolaev",
+   "name": "Николаевский Ванёк",
+   "scope": "oblast",
+   "oblasts": [
+    14,
+    15,
+    22
+   ],
+   "home": "mykolaiv",
+   "weight": 0.75,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "monitor1654",
+   "name": "monitor 1654 | Харків",
+   "scope": "oblast",
+   "oblasts": [
+    21
+   ],
+   "home": "kharkiv",
+   "weight": 0.75,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "synegubov",
+   "name": "Харківська ОВА (Синєгубов)",
+   "scope": "oblast",
+   "oblasts": [
+    21
+   ],
+   "home": "kharkiv",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "dnipropetrovskaODA",
+   "name": "Дніпропетровська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    3
+   ],
+   "home": "dnipro",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "kirovogradskaODA",
+   "name": "Кіровоградська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    11
+   ],
+   "home": "kropyvnytskyi",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "cherkaskaODA",
+   "name": "Черкаська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    24
+   ],
+   "home": "cherkasy",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "kyivoda",
+   "name": "Київська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    10
+   ],
+   "home": null,
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "KyivCityOfficial",
+   "name": "КМДА (Київ)",
+   "scope": "oblast",
+   "oblasts": [
+    9
+   ],
+   "home": "kyiv",
+   "weight": 0.9,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "odeskaODA",
+   "name": "Одеська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    15
+   ],
+   "home": "odesa",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "zoda_gov_ua",
+   "name": "Запорізька ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    7
+   ],
+   "home": "zaporizhzhia",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "Sumy_news_ODA",
+   "name": "Сумська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    19
+   ],
+   "home": "sumy",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "chernigivskaODA",
+   "name": "Чернігівська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    26
+   ],
+   "home": "chernihiv",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  },
+  {
+   "id": "zhytomyrskaODA",
+   "name": "Житомирська ОВА",
+   "scope": "oblast",
+   "oblasts": [
+    5
+   ],
+   "home": "zhytomyr",
+   "weight": 0.95,
+   "kind": "official",
+   "default": true
+  }
+ ]
+}

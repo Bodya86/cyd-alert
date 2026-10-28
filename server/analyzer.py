@@ -8,6 +8,8 @@ DATA = os.environ.get("CYD_DATA", os.path.join(os.path.dirname(os.path.abspath(_
 RED_TTL_MIN, YELLOW_TTL_MIN = 15, 40   # ракети/КАБ, дрони
 OBLAST_TTL_MIN = 10                    # «балістика хз звідки» — червоний на всю область, коротко
 FAR_KM = 150                           # місце далі — «далека ціль» (лише інформація)
+NEAR_KM = 60                           # для загальнонаціональних каналів: місце ближче — пост «наш»
+DEDUP_MIN = 10                         # одна подія з різних каналів: той самий тип+місце в межах 10 хв
 
 GREEN, YELLOW, RED = 0, 1, 2
 LEVEL_NAMES = {GREEN: "green", YELLOW: "yellow", RED: "red"}
@@ -21,6 +23,9 @@ def _load(name):
 
 RULES = _load("rules.json")
 LOC = _load("locations.json")
+CHANNELS_CFG = _load("channels.json")["channels"]
+CHANNELS = {c["id"].lower(): c for c in CHANNELS_CFG}
+OBLAST_KW = {int(k): [fold_kw(w) for w in v] for k, v in RULES.get("oblast_kw", {}).items()}
 CITIES = {c["id"]: c for c in LOC["cities"]}
 # усі ключові слова — у нормалізованій формі (як і текст поста)
 for _k in ("approach", "escalate", "clear", "ignore", "unknown_dir"):
@@ -101,6 +106,9 @@ class PostEval:
     far_place: str = ""
     far_km: int = 0
     oblast_wide: bool = False  # балістика з невідомим напрямком — червоний для всієї області на 10 хв
+    local: bool = False        # згадано ваше місто/район/село/область або місце ближче NEAR_KM
+    place: str = ""            # ключ місця для дедуплікації між каналами
+    threat: str = ""           # тип загрози (ballistic/missile/kab/drone/...)
     reasons: list = field(default_factory=list)
 
     @property
@@ -108,7 +116,38 @@ class PostEval:
         return ", ".join(self.reasons)
 
 
-def analyze_post(text: str, city_id: str = None, district_id: str = None) -> PostEval:
+def channel_cfg(ch):
+    return CHANNELS.get((ch or "").lower().lstrip("@")) or {"id": ch, "scope": "national", "oblasts": [], "home": None,
+                                                            "weight": 0.5, "default": False}
+
+
+def channel_is_local(ch, city_id):
+    """Канал «ваш»: міський канал вашого міста або обласний канал вашої області. Інакше — remote (правило відстані)."""
+    c = channel_cfg(ch)
+    city = CITIES.get(city_id) if city_id else None
+    if not city:
+        return False
+    if c.get("home") == city_id or (CITIES.get(city_id) or {}).get("channel", "").lower() == (ch or "").lower():
+        return True
+    return c.get("scope") == "oblast" and city["oblast"] in c.get("oblasts", [])
+
+
+def default_channels(city_id=None, oblast=None):
+    """Канали за замовчуванням: усі national з default + канали вашої області (default)."""
+    city = CITIES.get(city_id) if city_id else None
+    ob = city["oblast"] if city else oblast
+    out = []
+    for c in CHANNELS_CFG:
+        if not c.get("default"):
+            continue
+        if c["scope"] == "national" or (ob is not None and ob in c.get("oblasts", [])):
+            out.append(c["id"])
+    if city and city.get("channel") and city["channel"] not in out:
+        out.insert(0, city["channel"])
+    return out
+
+
+def analyze_post(text: str, city_id: str = None, district_id: str = None, remote: bool = False) -> PostEval:
     ev = PostEval()
     t = fold(text)
     ign = len(_any(t, RULES["ignore"]))
@@ -152,6 +191,27 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None) -> Pos
             settl_bonus = max(settl_bonus, b)
 
     places = find_places(t)
+    ev.threat = best[1]["type"] if best else ""
+    obl_hit = bool(city and _any(t, OBLAST_KW.get(city["oblast"], [])))
+    near_place = None
+    if city:
+        for pl, role in places:
+            if role == "at" and km_between(city["lat"], city["lon"], pl["lat"], pl["lon"]) <= NEAR_KM:
+                near_place = pl
+                break
+    ev.local = bool(in_city or settl_hit or dist_bonus or obl_hit or near_place)
+    if dist_bonus:
+        ev.place = place or ""
+    elif settl_hit:
+        ev.place = "settl:" + next((s["kw"][0] for s in RULES.get("settlements", {}).get(city["id"], []) if _any(t, s["kw"])), "")
+    elif in_city:
+        ev.place = "city"
+    elif near_place:
+        ev.place = near_place["n"]
+    elif obl_hit:
+        ev.place = "oblast"
+    elif places:
+        ev.place = places[0][0]["n"]
     unknown_dir = bool(_any(t, RULES.get("unknown_dir", [])))
     ev.relevant = threat_w > 0 or in_city or settl_bonus > 0 or approach or unknown_dir
     if not ev.relevant and not ev.clear:
@@ -178,7 +238,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None) -> Pos
     if approach: ev.reasons.append("курс")
     if escalate: ev.reasons.append("вибухи/ППО")
 
-    if ev.clear and not escalate and dist_bonus < 4:
+    if ev.clear and not escalate and dist_bonus < 4 and not (remote and not ev.local):
         ev.score, ev.level, ev.reasons = 0, GREEN, ["відбій / ціль пролетіла"]
         return ev
 
@@ -195,8 +255,16 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None) -> Pos
             ev.reasons = ([threat_label] if threat_label else []) + [f"далеко: {pl['n']} ~{round(d)} км"]
             return ev
 
+    # загальнонаціональний / чужий обласний канал: без згадки вашої території — лише інформація
+    if remote and city and not ev.local:
+        ev.clear = False          # «відбій» з чужого каналу не скасовує ваш рівень
+        ev.score = min(score, 2)
+        ev.level, ev.kind, ev.near = GREEN, "", False
+        ev.reasons = ([threat_label] if threat_label else []) + ["не про вашу область"]
+        return ev
     # балістика без місця або «хз звідки» → червоний на всю область (коротко, OBLAST_TTL_MIN)
-    if best and best[1]["type"] == "ballistic" and (unknown_dir or not (at or in_city or settl_hit or dist_bonus)):
+    if best and best[1]["type"] == "ballistic" and (unknown_dir or not (at or in_city or settl_hit or dist_bonus)) \
+            and (not remote or obl_hit or in_city):
         score = max(score, 6)
         ev.oblast_wide = True
         ev.reasons.append("напрямок невідомий — вся область")
@@ -208,7 +276,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None) -> Pos
     return ev
 
 
-def analyze_feed(posts, city_id=None, district_id=None, now=None):
+def analyze_feed(posts, city_id=None, district_id=None, now=None, remote=False):
     """posts: список dict {id, ts, text} у хронологічному порядку. Повертає (level, post|None, PostEval)."""
     now = now or time.time()
     cur, best, best_ev = GREEN, None, PostEval()
@@ -218,7 +286,7 @@ def analyze_feed(posts, city_id=None, district_id=None, now=None):
         age_min = (now - p["ts"]) / 60 if p.get("ts") else 0
         if age_min > YELLOW_TTL_MIN:
             continue
-        e = analyze_post(p["text"], city_id, district_id)
+        e = analyze_post(p["text"], city_id, district_id, remote)
         if e.ignored:
             continue
         if e.clear and e.level == GREEN:
@@ -234,3 +302,77 @@ def analyze_feed(posts, city_id=None, district_id=None, now=None):
         elif cur == GREEN and e.relevant:
             best, best_ev = p, e
     return cur, best, best_ev
+
+
+def _live(e, age_min):
+    if e.oblast_wide and age_min > OBLAST_TTL_MIN:
+        return False
+    if e.level == RED and age_min > RED_TTL_MIN:
+        return False
+    return age_min <= YELLOW_TTL_MIN
+
+
+def analyze_multi(feeds, city_id=None, district_id=None, now=None):
+    """Кілька каналів: feeds = {channel: [posts]}.
+    1) кожен пост оцінюється з урахуванням області каналу (national/чужа область → правило відстані);
+    2) «відбій» з вашого каналу скасовує все, що було раніше;
+    3) однакові події (тип + місце, ±DEDUP_MIN хв) з різних каналів зливаються в кластер,
+       довіра = 1 − Π(1 − weight); ≥2 каналів → +1 до балу; кластер лише з малодовірених каналів (<0.5) — не вище жовтого.
+    → (level, best_post|None (з полем channel), best_ev, clusters)"""
+    now = now or time.time()
+    items = []
+    last_clear = 0
+    for ch, posts in (feeds or {}).items():
+        cfg = channel_cfg(ch)
+        remote = not channel_is_local(ch, city_id)
+        for p in posts or []:
+            if not p.get("text"):
+                continue
+            ts = p.get("ts") or now
+            age = (now - ts) / 60
+            if age > YELLOW_TTL_MIN:
+                continue
+            e = analyze_post(p["text"], city_id, district_id, remote)
+            if e.ignored:
+                continue
+            if e.clear and e.level == GREEN:
+                if not remote or e.local:
+                    last_clear = max(last_clear, ts)
+                continue
+            items.append((ts, ch, cfg.get("weight", 0.5), p, e, age))
+    items.sort(key=lambda x: x[0])
+    clusters = []
+    for ts, ch, w, p, e, age in items:
+        if ts < last_clear or not (e.level > GREEN or e.relevant):
+            continue
+        key = (e.threat or e.kind, e.place)
+        cl = next((c for c in clusters if c["key"] == key and abs(ts - c["ts"]) <= DEDUP_MIN * 60), None)
+        if cl is None:
+            cl = {"key": key, "ts": ts, "first": ts, "channels": {}, "best": None}
+            clusters.append(cl)
+        cl["ts"] = max(cl["ts"], ts)
+        cl["channels"][ch] = max(cl["channels"].get(ch, 0), w)
+        if _live(e, age) and (cl["best"] is None or (e.level, e.score, w) >= (cl["best"][1].level, cl["best"][1].score, cl["best"][3])):
+            cl["best"] = (p, e, ch, w)
+    cur, best, best_ev, best_key = GREEN, None, PostEval(), (-1, -1.0, 0)
+    for cl in clusters:
+        conf = 1.0
+        for w in cl["channels"].values():
+            conf *= (1 - w)
+        cl["conf"] = round(1 - conf, 2)
+        cl["n"] = len(cl["channels"])
+        if not cl["best"]:
+            continue
+        p, e, ch, _w = cl["best"]
+        lvl = e.level
+        if cl["n"] >= 2 and lvl > GREEN:
+            e.score += 1
+            e.near = e.near or e.score >= 7
+            e.reasons.append(f"{cl['n']} канали")
+        if cl["conf"] < 0.5 and lvl == RED:
+            lvl = YELLOW
+        e.level = lvl
+        k = (lvl if lvl > GREEN else -1, cl["conf"], cl["ts"])
+        if k > best_key:
+            best_key, cur, best, best_ev = k, lvl, {**p, "channel": ch}, e
+    return cur, best, best_ev, clusters

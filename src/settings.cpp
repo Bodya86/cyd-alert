@@ -1,5 +1,6 @@
 #include "app.h"
 #include <Preferences.h>
+#include <strings.h>
 
 Settings g_set;
 AppState g_state;
@@ -20,6 +21,9 @@ void settingsLoad() {
   g_set.token = p.getString("token", DEFAULT_ALERTS_TOKEN);
   g_set.server = p.getString("server", DEFAULT_SERVER_URL);
   g_set.channel = p.getString("channel", "");
+  g_set.ghToken = p.getString("ghtoken", "");
+  g_set.chOn = p.getULong("chon", 0);
+  g_set.chCustom = p.getBool("chcust", false);
   g_set.oblast = p.getChar("oblast", -1);
   g_set.city = p.getShort("city", -1);
   g_set.district = p.getShort("district", -1);
@@ -50,6 +54,9 @@ void settingsSave() {
   p.putString("token", g_set.token);
   p.putString("server", g_set.server);
   p.putString("channel", g_set.channel);
+  p.putString("ghtoken", g_set.ghToken);
+  p.putULong("chon", g_set.chOn);
+  p.putBool("chcust", g_set.chCustom);
   p.putChar("oblast", g_set.oblast);
   p.putShort("city", g_set.city);
   p.putShort("district", g_set.district);
@@ -80,6 +87,33 @@ String userChannel() {
   const CityDef* c = userCity();
   return c ? String(c->channel) : String();
 }
+static bool channelDefault(int i) {
+  const ChannelDef& c = CHANNELS[i];
+  const CityDef* city = userCity();
+  if (city && city->channel && !strcasecmp(city->channel, c.id)) return true;
+  if (!c.def) return false;
+  if (c.scope == 0) return true;
+  return g_set.oblast >= 0 && (c.obMask & (1u << g_set.oblast));
+}
+bool channelEnabled(int i) {
+  if (i < 0 || i >= CHANNEL_COUNT || i >= 32) return false;
+  return g_set.chCustom ? (g_set.chOn >> i) & 1 : channelDefault(i);
+}
+void channelSetEnabled(int i, bool on) {
+  if (i < 0 || i >= CHANNEL_COUNT || i >= 32) return;
+  if (!g_set.chCustom) {
+    g_set.chOn = 0;
+    for (int k = 0; k < CHANNEL_COUNT && k < 32; k++) if (channelDefault(k)) g_set.chOn |= 1u << k;
+    g_set.chCustom = true;
+  }
+  if (on) g_set.chOn |= 1u << i; else g_set.chOn &= ~(1u << i);
+}
+int channelsEnabledCount() {
+  int n = 0;
+  for (int i = 0; i < CHANNEL_COUNT; i++) n += channelEnabled(i);
+  return n;
+}
+
 String userPlaceName() {
   const CityDef* c = userCity();
   if (!c) return g_set.oblast >= 0 ? String(OBLASTS[g_set.oblast].name) : String("Локацію не обрано");

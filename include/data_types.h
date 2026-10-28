@@ -18,3 +18,6 @@ struct CityDef {
   const StreetDef* streets; uint16_t nstreets;
   int16_t region;   // індекс району в MAP_REGIONS (data/city_regions.json), -1 — невідомо
 };
+
+// Telegram-канал (data/channels.json): scope 0 — уся Україна, 1 — область(і) з obMask, 2 — місто home
+struct ChannelDef { const char* id; const char* name; uint8_t scope; uint32_t obMask; const char* home; uint8_t weight; uint8_t def; };

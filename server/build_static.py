@@ -35,10 +35,68 @@ def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
 
-def wjson(path, obj):
+_written = {"n": 0, "skipped": 0}
+HEARTBEAT_S = 300       # навіть без змін файл перезаписується раз на 5 хв (поле generated — «живий»)
+_VOLATILE = ("generated", "next_in", "tg_at", "at")
+
+
+def _stable(obj):
+    if isinstance(obj, dict):
+        return {k: v for k, v in obj.items() if k not in _VOLATILE}
+    return obj
+
+
+def wjson(path, obj, force=False):
+    """Пише JSON лише якщо зміст змінився (без урахування generated) або минуло HEARTBEAT_S.
+    Так ETag у GitHub API не змінюється дарма, і ESP отримує дешеві 304."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not force and isinstance(obj, dict) and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = json.load(f)
+            if _stable(old) == _stable(obj) and time.time() - float(old.get("generated", 0)) < HEARTBEAT_S:
+                _written["skipped"] += 1
+                return False
+        except Exception:  # noqa: BLE001
+            pass
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+    _written["n"] += 1
+    return True
+
+
+def all_channels():
+    """Усі канали з data/channels.json + міські канали з locations.json (без дублікатів, порядок збережено)."""
+    seen, out = set(), []
+    for ch in [c["id"] for c in an.CHANNELS_CFG] + [c["channel"] for c in an.LOC["cities"] if c.get("channel")]:
+        if ch.lower() not in seen:
+            seen.add(ch.lower())
+            out.append(ch)
+    return out
+
+
+def fetch_all_channels(chans, workers=8):
+    """Паралельно читає t.me/s/<канал> для всіх каналів, оновлює srv.channels і трекер."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(ch):
+        try:
+            return ch, srv.fetch_channel(ch), None
+        except Exception as e:  # noqa: BLE001
+            return ch, None, str(e)
+    ok = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        res = list(ex.map(one, chans))
+    for ch, posts, err in res:
+        c = srv.channels.setdefault(ch, {"posts": [], "at": 0, "err": None, "last_req": time.time()})
+        if posts is not None:
+            c.update(posts=posts, at=time.time(), err=None)
+            srv.feed_tracker_posts(ch, posts)
+            ok += 1
+        else:
+            c.update(at=time.time(), err=err)          # at=now — щоб state() не тягнув знову; старі пости лишаються
+    log(f"tg: {ok}/{len(chans)} каналів" + "".join(f"; {ch}: {err}" for ch, _, err in res if err))
+    return ok
 
 
 def load_prev_state(path, url):
@@ -86,6 +144,85 @@ def jaam_snapshot(wait_s):
     return bool(upd)
 
 
+def write_outputs(out, state_path, chans, do_outage=True, next_in=300):
+    """Пише всі api/*.json (лише змінені), index.html і стан трекера. → кількість state-файлів."""
+    gen = int(time.time())
+    meta = {"generated": gen, "static": True, "next_in": next_in}
+
+    # ---- стани по містах і районах
+    n_state = 0
+    for cdef in an.LOC["cities"]:
+        cid = cdef["id"]
+        for did in [None] + [d["id"] for d in cdef.get("districts", [])]:
+            q = {"city": cid}
+            if did:
+                q["district"] = did
+            try:
+                st = {**srv.state(q), **meta, "city": cid, "district": did}
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                continue
+            wjson(os.path.join(out, "api", "state", cid, did + ".json") if did else os.path.join(out, "api", "state", cid + ".json"), st)
+            n_state += 1
+            if cid == DEFAULT_CITY and not did:
+                wjson(os.path.join(out, "api", "state.json"), st)
+        try:
+            tg = {**srv.targets_api({"city": cid}), **meta}
+            wjson(os.path.join(out, "api", "targets", cid + ".json"), tg)
+            if cid == DEFAULT_CITY:
+                wjson(os.path.join(out, "api", "targets.json"), tg)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+    # ---- пости: кожен канал окремо (оцінка для «дому» каналу) + зведена стрічка для Кременчука
+    for ch in chans:
+        home = srv.home_city(ch)
+        city = home["id"] if home else DEFAULT_CITY
+        wjson(os.path.join(out, "api", "posts", ch + ".json"), {**srv.posts_api({"channel": ch, "city": city}), **meta})
+    wjson(os.path.join(out, "api", "posts.json"), {**srv.posts_api({"city": DEFAULT_CITY}), **meta})
+    # ---- список каналів (для дашборда / налаштувань)
+    wjson(os.path.join(out, "api", "channels.json"), {"channels": [
+        {**c, "ok": not (srv.channels.get(c["id"]) or {}).get("err"), "at": int((srv.channels.get(c["id"]) or {}).get("at", 0))}
+        for c in an.CHANNELS_CFG], **meta})
+
+    # ---- відключення
+    n_out = 0
+    if do_outage:
+        def_ob = an.CITIES[DEFAULT_CITY]["oblast"]
+        oblasts = sorted({o for p in outage.CFG["providers"] for o in p["oblasts"]})
+        for obi in oblasts:
+            groups = {}
+            for g in outage.CFG["groups"]:
+                try:
+                    r = outage.get_outage(obi, g)
+                except Exception as e:  # noqa: BLE001
+                    r = {"days": [], "group": g, "err": str(e)}
+                r = {**r, **meta}
+                groups[g] = r
+                wjson(os.path.join(out, "api", "outage", str(obi), g + ".json"), r)
+                n_out += 1
+            if obi == def_ob:
+                wjson(os.path.join(out, "api", "outage.json"), {"oblast": obi, "city": DEFAULT_CITY, "groups": groups, **meta})
+        log(f"outage: {n_out} файлів, {len(oblasts)} областей")
+
+    # ---- дашборд і стан
+    loc = json.dumps({"cities": [{"id": c["id"], "name": c["name"], "oblast": c["oblast"], "channel": c.get("channel", ""),
+                                  "districts": [{"id": d["id"], "name": d["name"]} for d in c["districts"]]}
+                                 for c in an.LOC["cities"]]}, ensure_ascii=False)
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_index.html"), encoding="utf-8") as f:
+        html = f.read().replace("%LOC%", loc).replace("%GROUPS%", json.dumps(outage.CFG["groups"]))
+    ip = os.path.join(out, "index.html")
+    if not os.path.exists(ip) or open(ip, encoding="utf-8").read() != html:
+        with open(ip, "w", encoding="utf-8") as f:
+            f.write(html)
+    open(os.path.join(out, ".nojekyll"), "w").close()
+    st = tk.tracker_dump(srv.trk, {"prev_lvl": srv._prev_lvl, "jaam_ev_seen": srv._jaam_ev_seen, "saved": gen})
+    wjson(state_path, st, force=True)
+    if os.path.abspath(state_path) != os.path.abspath(os.path.join(out, "tracker_state.json")):
+        wjson(os.path.join(out, "tracker_state.json"), st, force=True)
+    return n_state
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="public")
@@ -122,89 +259,12 @@ def main():
         srv.alerts["err"] = str(e)
         log("alerts error:", e)
 
-    # ---- Telegram
-    chans = sorted({c["channel"] for c in an.LOC["cities"] if c.get("channel")})
-    for ch in chans:
-        c = srv.channels.setdefault(ch, {"posts": [], "at": 0, "err": None, "last_req": time.time()})
-        try:
-            posts = srv.fetch_channel(ch)
-            c.update(posts=posts, at=time.time(), err=None)
-            srv.feed_tracker_posts(ch, posts)
-            log(f"tg {ch}: {len(posts)} постів")
-        except Exception as e:  # noqa: BLE001
-            c.update(at=time.time(), err=str(e))      # at=now — щоб state() не тягнув знову
-            log(f"tg {ch}:", e)
+    # ---- Telegram (усі канали паралельно)
+    chans = all_channels()
+    fetch_all_channels(chans)
 
-    gen = int(time.time())
-    meta = {"generated": gen, "static": True, "next_in": 300}
-
-    # ---- стани по містах і районах
-    n_state = 0
-    for cdef in an.LOC["cities"]:
-        cid = cdef["id"]
-        for did in [None] + [d["id"] for d in cdef.get("districts", [])]:
-            q = {"city": cid}
-            if did:
-                q["district"] = did
-            try:
-                st = {**srv.state(q), **meta, "city": cid, "district": did}
-            except Exception:  # noqa: BLE001
-                traceback.print_exc()
-                continue
-            wjson(os.path.join(out, "api", "state", cid, did + ".json") if did else os.path.join(out, "api", "state", cid + ".json"), st)
-            n_state += 1
-            if cid == DEFAULT_CITY and not did:
-                wjson(os.path.join(out, "api", "state.json"), st)
-        try:
-            tg = {**srv.targets_api({"city": cid}), **meta}
-            wjson(os.path.join(out, "api", "targets", cid + ".json"), tg)
-            if cid == DEFAULT_CITY:
-                wjson(os.path.join(out, "api", "targets.json"), tg)
-        except Exception:  # noqa: BLE001
-            traceback.print_exc()
-
-    # ---- пости
-    for ch in chans:
-        city = next((c["id"] for c in an.LOC["cities"] if c.get("channel") == ch), None)
-        p = {**srv.posts_api({"channel": ch, "city": city}), **meta}
-        wjson(os.path.join(out, "api", "posts", ch + ".json"), p)
-        if city == DEFAULT_CITY:
-            wjson(os.path.join(out, "api", "posts.json"), p)
-
-    # ---- відключення
-    n_out = 0
-    if not a.no_outage:
-        def_ob = an.CITIES[DEFAULT_CITY]["oblast"]
-        oblasts = sorted({o for p in outage.CFG["providers"] for o in p["oblasts"]})
-        for obi in oblasts:
-            groups = {}
-            for g in outage.CFG["groups"]:
-                try:
-                    r = outage.get_outage(obi, g)
-                except Exception as e:  # noqa: BLE001
-                    r = {"days": [], "group": g, "err": str(e)}
-                r = {**r, **meta}
-                groups[g] = r
-                wjson(os.path.join(out, "api", "outage", str(obi), g + ".json"), r)
-                n_out += 1
-            if obi == def_ob:
-                wjson(os.path.join(out, "api", "outage.json"), {"oblast": obi, "city": DEFAULT_CITY, "groups": groups, **meta})
-        log(f"outage: {n_out} файлів, {len(oblasts)} областей")
-
-    # ---- дашборд і стан
-    loc = json.dumps({"cities": [{"id": c["id"], "name": c["name"], "oblast": c["oblast"], "channel": c.get("channel", ""),
-                                  "districts": [{"id": d["id"], "name": d["name"]} for d in c["districts"]]}
-                                 for c in an.LOC["cities"]]}, ensure_ascii=False)
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_index.html"), encoding="utf-8") as f:
-        html = f.read().replace("%LOC%", loc).replace("%GROUPS%", json.dumps(outage.CFG["groups"]))
-    with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as f:
-        f.write(html)
-    open(os.path.join(out, ".nojekyll"), "w").close()
-    st = tk.tracker_dump(srv.trk, {"prev_lvl": srv._prev_lvl, "jaam_ev_seen": srv._jaam_ev_seen, "saved": gen})
-    wjson(state_path, st)
-    if os.path.abspath(state_path) != os.path.abspath(os.path.join(out, "tracker_state.json")):
-        wjson(os.path.join(out, "tracker_state.json"), st)
-    log(f"done: {n_state} state-файлів, цілей {len(srv.trk.tracks)}, {time.time() - t_start:.1f} с → {out}/")
+    write_outputs(out, state_path, chans, do_outage=not a.no_outage, next_in=300)
+    log(f"done: записано {_written['n']}, без змін {_written['skipped']}, цілей {len(srv.trk.tracks)}, {time.time() - t_start:.1f} с → {out}/")
     return 0
 
 

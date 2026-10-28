@@ -1,3 +1,4 @@
+import re
 #!/usr/bin/env python3
 """Генерує include/gen_data.h з data/*.json (області, міста, райони, вулиці, правила аналізу).
 Запускається автоматично PlatformIO перед збіркою (extra_scripts = pre:tools/gen_data.py),
@@ -109,6 +110,32 @@ def main():
             f"{ck}, {cc}, {dname}, {len(ci['districts'])}, {sname}, {sc}, {stn}, {stc}, {city_reg.get(cid, -1)}}},")
     w(f"\n#define CITY_COUNT {len(city_lines)}")
     w("static const CityDef CITIES[CITY_COUNT] = {\n" + "\n".join(city_lines) + "\n};")
+
+    # згадки областей (для загальнонаціональних каналів)
+    okw = rules.get("oblast_kw", {})
+    ol = []
+    for i in range(len(loc["oblasts"])):
+        if okw.get(str(i)):
+            k, c = kwlist(okw[str(i)])
+            ol.append(f"  {{{k}, {c}}},")
+        else:
+            ol.append("  {nullptr, 0},")
+    w("static const WordList OBLAST_KW[OBLAST_COUNT] = {\n" + "\n".join(ol) + "\n};")
+
+    # Telegram-канали (data/channels.json) — порядок = біт у масці налаштувань
+    chj = json.load(open(os.path.join(DATA, "channels.json"), encoding="utf-8"))["channels"]
+    cl = []
+    for ch in chj:
+        sc = {"national": 0, "oblast": 1, "city": 2}[ch["scope"]]
+        mask = 0
+        for ob_ in ch.get("oblasts", []):
+            mask |= 1 << ob_
+        nm = re.sub(r"[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ .,:()|/'-]", "", ch["name"]).strip(" |")
+        nm = re.sub(r" +", " ", nm)
+        cl.append(f"  {{{cstr(ch['id'])}, {cstr(nm)}, {sc}, {mask}u, {cstr(ch.get('home') or '')}, "
+                  f"{int(round(ch['weight'] * 100))}, {1 if ch.get('default') else 0}}},")
+    w(f"#define CHANNEL_COUNT {len(cl)}")
+    w("static const ChannelDef CHANNELS[CHANNEL_COUNT] = {\n" + "\n".join(cl) + "\n};")
 
     # графіки відключень
     out = json.load(open(os.path.join(DATA, "outages.json"), encoding="utf-8"))

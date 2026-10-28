@@ -2,6 +2,7 @@
 #include "analyzer.h"
 #include "textutil.h"
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <math.h>
 
@@ -43,7 +44,19 @@ static void addReason(char* r, size_t n, const char* s) {
   strlcat(r, s, n);
 }
 
-PostEval analyzePost(const char* text, const CityDef* city, int district) {
+bool channelIsLocal(const char* ch, const CityDef* city) {
+  if (!city || !ch || !ch[0]) return false;
+  if (city->channel && !strcasecmp(city->channel, ch)) return true;
+  for (int i = 0; i < CHANNEL_COUNT; i++) {
+    const ChannelDef& c = CHANNELS[i];
+    if (strcasecmp(c.id, ch)) continue;
+    if (c.home[0] && !strcmp(c.home, city->id)) return true;
+    return c.scope == 1 && (c.obMask & (1u << city->oblast));
+  }
+  return false;
+}
+
+PostEval analyzePost(const char* text, const CityDef* city, int district, bool remote) {
   PostEval ev;
   static char low[TG_TEXT_MAX * 2];
   utf8Fold(text, low, sizeof(low));
@@ -98,6 +111,8 @@ PostEval analyzePost(const char* text, const CityDef* city, int district) {
   bool unknownDir = anyKw(low, RULE_UNKNOWN_DIR.w, RULE_UNKNOWN_DIR.n);
   // великі міста: роль «at» (де ціль) чи «from» (звідки летить)
   int nAt = 0; float nearestKm = 1e9f; const char* nearestName = "";
+  bool oblHit = city && city->oblast < OBLAST_COUNT && OBLAST_KW[city->oblast].n &&
+                countWords(low, OBLAST_KW[city->oblast].w, OBLAST_KW[city->oblast].n) > 0;
   for (int i = 0; i < PLACE_COUNT; i++) {
     const PlaceDef& P = PLACES[i];
     for (int k = 0; k < P.nkw; k++) {
@@ -117,6 +132,8 @@ PostEval analyzePost(const char* text, const CityDef* city, int district) {
       break;
     }
   }
+  ev.threat = best >= 0 ? (uint8_t)best : 255;
+  ev.local = inCity || settlHit || distBonus || oblHit || (nAt && nearestKm <= NEAR_PLACE_KM);
   ev.relevant = threatW > 0 || inCity || settlBonus > 0 || approach || unknownDir;
   if (!ev.relevant && !ev.clear) return ev;
 
@@ -136,7 +153,7 @@ PostEval analyzePost(const char* text, const CityDef* city, int district) {
   if (approach) addReason(ev.reason, sizeof(ev.reason), "курс");
   if (escalate) addReason(ev.reason, sizeof(ev.reason), "вибухи/ППО");
 
-  if (ev.clear && !escalate && distBonus < 4) {
+  if (ev.clear && !escalate && distBonus < 4 && !(remote && !ev.local)) {
     ev.score = 0; ev.level = LVL_GREEN;
     strlcpy(ev.reason, "відбій / ціль пролетіла", sizeof(ev.reason));
     return ev;
@@ -153,8 +170,19 @@ PostEval analyzePost(const char* text, const CityDef* city, int district) {
     addReason(ev.reason, sizeof(ev.reason), b);
     return ev;
   }
+  // загальнонаціональний / чужий обласний канал: без згадки вашої території — лише інформація
+  if (remote && city && !ev.local) {
+    ev.clear = false;
+    ev.score = score < 2 ? score : 2;
+    ev.level = LVL_GREEN; ev.kind = ""; ev.near = false;
+    ev.reason[0] = 0;
+    if (threatLabel) addReason(ev.reason, sizeof(ev.reason), threatLabel);
+    addReason(ev.reason, sizeof(ev.reason), "не про вашу область");
+    return ev;
+  }
   // балістика без місця або «хз звідки» → червоний на всю область (коротко)
-  if (best >= 0 && !strcmp(THREATS[best].type, "ballistic") && (unknownDir || !(nAt || inCity || settlHit || distBonus))) {
+  if (best >= 0 && !strcmp(THREATS[best].type, "ballistic") && (unknownDir || !(nAt || inCity || settlHit || distBonus)) &&
+      (!remote || oblHit || inCity)) {
     if (score < 6) score = 6;
     ev.oblastWide = true;
     addReason(ev.reason, sizeof(ev.reason), "напрямок невідомий — вся область");
@@ -169,7 +197,7 @@ PostEval analyzePost(const char* text, const CityDef* city, int district) {
 }
 
 Level analyzeFeed(const TgPost* posts, int n, const CityDef* city, int district, time_t now,
-                  int* bestIdx, PostEval* bestEval) {
+                  int* bestIdx, PostEval* bestEval, bool remote) {
   Level cur = LVL_GREEN;
   int best = -1;
   PostEval bestE;
@@ -178,7 +206,7 @@ Level analyzeFeed(const TgPost* posts, int n, const CityDef* city, int district,
     if (!p.text[0]) continue;
     long ageMin = (now > 100000 && p.ts) ? (long)(now - p.ts) / 60 : 0;
     if (ageMin > POST_YELLOW_TTL_MIN) continue;
-    PostEval e = analyzePost(p.text, city, district);
+    PostEval e = analyzePost(p.text, city, district, remote);
     if (e.ignored) continue;
     if (e.clear && e.level == LVL_GREEN) { cur = LVL_GREEN; best = i; bestE = e; continue; }
     Level l = e.level;

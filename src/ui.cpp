@@ -1,5 +1,6 @@
 // Інтерфейс на LVGL 8.3: майстер Wi-Fi, вибір локації, мапа, сповіщення, налаштування
 #include "app.h"
+#include "analyzer.h"
 #include "textutil.h"
 #include "map_meta.h"
 #include <WiFi.h>
@@ -884,8 +885,8 @@ static void updateMain(bool full) {
     } else if (snap.tgOk) {
       line = String("Telegram: ") + (snap.tgReason[0] ? snap.tgReason : "немає загроз");
     } else {
-      String ch = userChannel();
-      line = ch.length() ? ("Очікування даних з @" + ch + "…") : String("Telegram-канал не задано (Налаштування)");
+      int n = channelsEnabledCount() + (g_set.channel.length() ? 1 : 0);
+      line = n ? ("Читаю Telegram-канали (" + String(n) + ")…") : String("Telegram-канали вимкнено (Налаштування)");
     }
     if (snap.trkOk && (snap.ntgt || snap.pNear || snap.pBallistic)) {
       char pre[64];
@@ -955,8 +956,9 @@ static void showDetail() {
   t2 += String("\nОбласть: ") + osTxt + "  (" + s.alertsSrc + (s.regionsFine ? ", по районах" : ", по областях") + ")";
   l = mkLabel(cont, t2.c_str(), &font_ua_14, C_TEXT);
   lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-  String ch = userChannel();
-  String t3 = String("Telegram @") + (ch.length() ? ch : "—") + " (" + s.tgSrc + "): " + levelName(s.tgLevel) +
+  String ch = s.tgChan[0] ? String(s.tgChan) : String("—");
+  String t3 = String("Telegram ") + s.tgNok + "/" + s.tgNch + " каналів, головне @" + ch + " (" + s.tgSrc +
+              (s.tgAgree >= 2 ? String(", підтверджують ") + s.tgAgree : String()) + "): " + levelName(s.tgLevel) +
               (s.tgKind[0] ? String(" / ") + s.tgKind : String()) + ", бал " + s.tgScore + (s.tgNear ? ", поруч" : "") +
               (s.tgReason[0] ? String("\nПричини: ") + s.tgReason : String());
   l = mkLabel(cont, t3.c_str(), &font_ua_12, C_MUTED);
@@ -1069,8 +1071,58 @@ static void showTextEdit(const char* title, const String& val, const char* hint,
 static void setWifiCb(lv_event_t*) { showWifiScan(); }
 static void setLocCb(lv_event_t*) { showOblastPicker(); }
 static void setChanCb(lv_event_t*) {
-  showTextEdit("Telegram-канал (без @)", g_set.channel.length() ? g_set.channel : userChannel(), "напр. kremen_sv",
-               [](const String& v) { String s = v; s.replace("@", ""); s.replace("https://t.me/", ""); s.replace("t.me/", ""); g_set.channel = s; });
+  showTextEdit("Свій Telegram-канал (без @)", g_set.channel, "напр. kremen_sv (порожньо — немає)",
+               [](const String& v) { String s = v; s.replace("@", ""); s.replace("https://t.me/s/", ""); s.replace("https://t.me/", ""); s.replace("t.me/", ""); s.trim(); g_set.channel = s; });
+}
+static void setGhTokCb(lv_event_t*) {
+  showTextEdit("GitHub token (необовʼязково)", g_set.ghToken, "fine-grained, лише читання публічних репо",
+               [](const String& v) { g_set.ghToken = v; });
+}
+static void showChannels();
+static void setChanListCb(lv_event_t*) { showChannels(); }
+static void chanToggleCb(lv_event_t* e) {
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+  channelSetEnabled(i, on);
+  settingsSave();
+  netForceRefresh();
+}
+static void chanDefaultsCb(lv_event_t*) {
+  g_set.chCustom = false; g_set.chOn = 0;
+  settingsSave(); netForceRefresh();
+  showChannels(); toast("Типові канали для області");
+}
+// Список каналів: спершу ваші (місто/область), далі загальнонаціональні, далі інших областей
+static void showChannels() {
+  lv_obj_t* scr = mkScreen(SK_SETTINGS);
+  mkHeader(scr, "Telegram-канали", toSettingsCb);
+  lv_obj_t* list = mkList(scr, 36, 204);
+  String own = "Свій канал: " + (g_set.channel.length() ? "@" + g_set.channel : String("—"));
+  mkListBtn(list, LV_SYMBOL_EDIT, own.c_str(), setChanCb, nullptr);
+  mkListBtn(list, LV_SYMBOL_REFRESH, g_set.chCustom ? "Повернути типові для області" : "Типові для області (зараз)",
+            chanDefaultsCb, nullptr);
+  const CityDef* city = userCity();
+  for (int pass = 0; pass < 3; pass++) {
+    for (int i = 0; i < CHANNEL_COUNT && i < 32; i++) {
+      const ChannelDef& c = CHANNELS[i];
+      bool mine = channelIsLocal(c.id, city) || (c.scope && g_set.oblast >= 0 && (c.obMask & (1u << g_set.oblast)));
+      int grp = mine ? 0 : (c.scope == 0 ? 1 : 2);
+      if (grp != pass) continue;
+      Level L = LVL_GREEN;
+      int st = netChannelStatus(i, &L);
+      String t = String(c.name) + "\n@" + c.id + (grp == 1 ? "  · вся Україна" : grp == 0 ? "  · ваш регіон" : "") +
+                 (st == 1 ? String("  · ") + levelName(L) : st == 2 ? String("  · помилка") : String());
+      lv_obj_t* cb = lv_checkbox_create(list);
+      lv_checkbox_set_text(cb, t.c_str());
+      lv_obj_set_width(cb, LV_PCT(100));
+      lv_obj_set_style_text_font(cb, &font_ua_12, 0);
+      lv_obj_set_style_text_color(cb, col(grp == 2 ? C_MUTED : C_TEXT), 0);
+      lv_obj_set_style_pad_ver(cb, 4, 0);
+      if (channelEnabled(i)) lv_obj_add_state(cb, LV_STATE_CHECKED);
+      lv_obj_add_event_cb(cb, chanToggleCb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)i);
+    }
+  }
+  loadScreen(scr);
 }
 static void setSrvCb(lv_event_t*) {
   showTextEdit("Companion-сервер", g_set.server, "https://bodya86.github.io/cyd-alert або http://IP:8080 (порожньо = вимк.)",
@@ -1114,10 +1166,13 @@ static void showSettings() {
   mkListBtn(list, LV_SYMBOL_WIFI, w.c_str(), setWifiCb, nullptr);
   String loc = "Локація: " + userPlaceName();
   mkListBtn(list, LV_SYMBOL_GPS, loc.c_str(), setLocCb, nullptr);
-  String ch = "Telegram: @" + (userChannel().length() ? userChannel() : String("—"));
-  mkListBtn(list, LV_SYMBOL_BELL, ch.c_str(), setChanCb, nullptr);
+  String ch = "Telegram: " + String(channelsEnabledCount() + (g_set.channel.length() ? 1 : 0)) + " каналів" +
+              (g_set.chCustom ? "" : " (типові)");
+  mkListBtn(list, LV_SYMBOL_BELL, ch.c_str(), setChanListCb, nullptr);
   String sv = "Сервер: " + (g_set.server.length() ? g_set.server : String("вимкнено"));
   mkListBtn(list, LV_SYMBOL_UPLOAD, sv.c_str(), setSrvCb, nullptr);
+  String gt = String("GitHub token: ") + (g_set.ghToken.length() ? "задано (опит. 20 с)" : "немає (опит. 75 с)");
+  mkListBtn(list, LV_SYMBOL_DOWNLOAD, gt.c_str(), setGhTokCb, nullptr);
   String tk = String("alerts.in.ua: ") + (g_set.token.length() ? "токен задано" : "без токена (ubilling)");
   mkListBtn(list, LV_SYMBOL_KEYBOARD, tk.c_str(), setTokCb, nullptr);
   static const char* om[] = {"вимкнено", "авто", "вручну"};

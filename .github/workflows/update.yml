@@ -1,4 +1,5 @@
-# Оновлення статичних даних CYD Alert кожні ~5 хв і публікація на GitHub Pages.
+# Резервна копія даних CYD Alert на GitHub Pages раз на годину (+ дашборд index.html).
+# Свіжі дані щохвилини публікує live.yml у гілку `data` — дашборд і ESP читають насамперед її.
 # Увімкнути: Settings → Pages → Build and deployment → Source: «GitHub Actions».
 # Увага: розклад GitHub (cron) не гарантований — запуски можуть запізнюватись на 5–20 хв або пропускатися
 # при навантаженні; ESP тому сам читає тривоги/Telegram напряму, а з Pages бере прогноз цілей і графіки.
@@ -6,7 +7,7 @@ name: update-static
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +40,15 @@ jobs:
           path: .state
           key: tracker-${{ github.run_id }}
           restore-keys: tracker-
+
+      # найсвіжіший стан трекера — з гілки data (live.yml), якщо вона вже є
+      - name: Tracker state from data branch
+        continue-on-error: true
+        run: |
+          mkdir -p .state
+          if git fetch -q --depth=1 origin data && git show FETCH_HEAD:tracker_state.json > /tmp/ts.json && [ -s /tmp/ts.json ]; then
+            mv /tmp/ts.json .state/tracker_state.json
+          fi
 
       - name: Build static API
         env:

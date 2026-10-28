@@ -9,9 +9,10 @@ static int dist(const CityDef* c, const char* id) { for (int i = 0; i < c->ndist
 #include "cases_gen.h"
 static int fails = 0;
 // near: 1 = має бути «поруч», 0 = ні, -1 = не перевіряти
-static void expect(const char* txt, const char* d, Level want, int near = -1, int far = -1, int ow = -1) {
+static void expect(const char* txt, const char* d, Level want, int near = -1, int far = -1, int ow = -1, const char* ch = "") {
   const CityDef* k = city("kremenchuk");
-  PostEval e = analyzePost(txt, k, dist(k, d));
+  bool remote = ch && ch[0] && !channelIsLocal(ch, k);
+  PostEval e = analyzePost(txt, k, dist(k, d), remote);
   bool ok = e.level == want && (near < 0 || (int)e.near == near) && (far < 0 || (int)e.far == far) &&
             (ow < 0 || (int)e.oblastWide == ow);
   if (!ok) fails++;
@@ -50,7 +51,7 @@ static void outageTests() {
 int main(int argc, char** argv) {
   outageTests();
   // ЖОВТИЙ = дрони, ЧЕРВОНИЙ = ракети/КАБ/авіація, ЗЕЛЕНИЙ = чисто
-  for (const Case& c : CASES) expect(c.t, c.d, c.l, c.near, c.far, c.ow);   // test/analyzer_cases.json
+  for (const Case& c : CASES) expect(c.t, c.d, c.l, c.near, c.far, c.ow, c.ch);   // test/analyzer_cases.json
   {  // балістика «хз звідки» — червоний 10 хв; «харьков ракета» — лише інформація
     static TgPost fp[2];
     time_t now = 1800000000;

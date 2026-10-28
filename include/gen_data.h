@@ -484,6 +484,77 @@ static const CityDef CITIES[CITY_COUNT] = {
   {"sevastopol", "Севастополь", 18, 44.616f, 33.525f, "", KW_191, 1, nullptr, 0, nullptr, 0, nullptr, 0, 103},
   {"sievierodonetsk", "Сєвєродонецьк", 12, 48.948f, 38.487f, "", KW_192, 2, nullptr, 0, nullptr, 0, nullptr, 0, 75},
 };
+static const char* const KW_193[] = {"винничин", "винниччин", "винницк обл", "винницк обл"};
+static const char* const KW_194[] = {"днипропетровщин", "днипропетровск обл", "днепропетровск обл", "днипровщин", "днепропетровщин"};
+static const char* const KW_195[] = {"донеччин", "донецк обл", "донецк обл"};
+static const char* const KW_196[] = {"житомирщин", "житомирск обл", "житомирск обл"};
+static const char* const KW_197[] = {"запорижжя обл", "запорижск обл", "запорожск обл", "запорижчин"};
+static const char* const KW_198[] = {"киивщин", "киевщин", "киивск обл", "киевск обл"};
+static const char* const KW_199[] = {"кировоградщин", "кировоградск обл", "кировоградск обл", "кировоградск област", "кировоградск област"};
+static const char* const KW_200[] = {"миколаивщин", "николаевщин", "миколаивск обл", "николаевск обл"};
+static const char* const KW_201[] = {"одещин", "одеск обл", "одесск обл"};
+static const char* const KW_202[] = {"полтавщин", "полтавск област", "полтавск обл", "полтавск област", "полтавск обл", "полтавской обл"};
+static const char* const KW_203[] = {"сумщин", "сумск обл", "сумск обл"};
+static const char* const KW_204[] = {"харкивщин", "харковщин", "харкивск обл", "харковск обл"};
+static const char* const KW_205[] = {"херсонщин", "херсонск обл", "херсонск обл"};
+static const char* const KW_206[] = {"черкащин", "черкаск обл", "черкасск обл"};
+static const char* const KW_207[] = {"чернигивщин", "черниговщин", "чернигивск обл", "черниговск обл"};
+static const WordList OBLAST_KW[OBLAST_COUNT] = {
+  {nullptr, 0},
+  {nullptr, 0},
+  {KW_193, 4},
+  {KW_194, 5},
+  {KW_195, 3},
+  {KW_196, 3},
+  {nullptr, 0},
+  {KW_197, 4},
+  {nullptr, 0},
+  {nullptr, 0},
+  {KW_198, 4},
+  {KW_199, 5},
+  {nullptr, 0},
+  {nullptr, 0},
+  {KW_200, 4},
+  {KW_201, 3},
+  {KW_202, 6},
+  {nullptr, 0},
+  {nullptr, 0},
+  {KW_203, 3},
+  {nullptr, 0},
+  {KW_204, 4},
+  {KW_205, 3},
+  {nullptr, 0},
+  {KW_206, 3},
+  {nullptr, 0},
+  {KW_207, 4},
+};
+#define CHANNEL_COUNT 24
+static const ChannelDef CHANNELS[CHANNEL_COUNT] = {
+  {"kremen_sv", "Кременчуцький Миколай", 2, 65536u, "kremenchuk", 90, 1},
+  {"ppo_poltava", "ППО Полтавщина: Нічні мисливці", 1, 65536u, "", 75, 1},
+  {"poltavskaODA", "Полтавська ОВА", 1, 65536u, "poltava", 95, 1},
+  {"kremenchuk_info", "Кременчук INFO", 2, 65536u, "kremenchuk", 50, 0},
+  {"poltava_monitor", "Полтава І Моніторинг", 1, 65536u, "poltava", 55, 0},
+  {"kpszsu", "Повітряні Сили ЗСУ", 0, 0u, "", 100, 1},
+  {"war_monitor", "monitor", 0, 0u, "", 80, 1},
+  {"kudy_letyt", "Ринда моніторить", 0, 0u, "", 75, 1},
+  {"raketa_trevoga", "Чому тривога | Радар", 0, 0u, "", 70, 0},
+  {"eRadarrua", "єРадар", 0, 0u, "", 65, 0},
+  {"mon1tor_ua", "ППО радар | Напрямок ракет", 0, 0u, "", 60, 0},
+  {"vanek_nikolaev", "Николаевский Ванк", 1, 4243456u, "mykolaiv", 75, 1},
+  {"monitor1654", "monitor 1654 | Харків", 1, 2097152u, "kharkiv", 75, 1},
+  {"synegubov", "Харківська ОВА (Синєгубов)", 1, 2097152u, "kharkiv", 95, 1},
+  {"dnipropetrovskaODA", "Дніпропетровська ОВА", 1, 8u, "dnipro", 95, 1},
+  {"kirovogradskaODA", "Кіровоградська ОВА", 1, 2048u, "kropyvnytskyi", 95, 1},
+  {"cherkaskaODA", "Черкаська ОВА", 1, 16777216u, "cherkasy", 95, 1},
+  {"kyivoda", "Київська ОВА", 1, 1024u, "", 95, 1},
+  {"KyivCityOfficial", "КМДА (Київ)", 1, 512u, "kyiv", 90, 1},
+  {"odeskaODA", "Одеська ОВА", 1, 32768u, "odesa", 95, 1},
+  {"zoda_gov_ua", "Запорізька ОВА", 1, 128u, "zaporizhzhia", 95, 1},
+  {"Sumy_news_ODA", "Сумська ОВА", 1, 524288u, "sumy", 95, 1},
+  {"chernigivskaODA", "Чернігівська ОВА", 1, 67108864u, "chernihiv", 95, 1},
+  {"zhytomyrskaODA", "Житомирська ОВА", 1, 32u, "zhytomyr", 95, 1},
+};
 
 #define OUTAGE_GROUP_COUNT 12
 static const char* const OUTAGE_GROUPS[] = {"1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"};

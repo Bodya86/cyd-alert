@@ -78,7 +78,7 @@
 #define LV_USE_MENU 0
 #define LV_USE_ANIMIMG 0
 #define LV_USE_TABLE 0
-#define LV_USE_CHECKBOX 0
+#define LV_USE_CHECKBOX 1
 #define LV_USE_DROPDOWN 1
 #define LV_USE_ROLLER 1
 #define LV_USE_LINE 1
