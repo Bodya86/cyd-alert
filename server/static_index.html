@@ -2,7 +2,7 @@
 <title>CYD Alert</title><style>
 body{background:#0d1117;color:#e6edf3;font:15px system-ui;margin:0;padding:20px;max-width:760px;margin:auto}
 .card{background:#161b22;border-radius:14px;padding:16px;margin:12px 0;border-left:6px solid #3fb950}
-.yellow{border-color:#f2c94c}.red{border-color:#ff4d4f}.mut{color:#8b949e;font-size:13px}
+.yellow{border-color:#f2c94c}.orange{border-color:#ff8c1a}.red{border-color:#ff4d4f}body{transition:background .6s}body.Lyellow{background:#1d1a0d}body.Lorange{background:#2a1606}body.Lred{background:#3a0b0d;box-shadow:inset 0 0 0 8px #ff4d4f;min-height:100vh}.mut{color:#8b949e;font-size:13px}
 h1{font-size:22px}select,input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:6px}
 </style><h1>🛡 CYD Alert <span class=mut id=gen></span></h1>
 <div>Місто <select id=c></select> Район <select id=d></select></div><div id=st></div><div id=tg></div><div id=out></div><div id=ps></div>
@@ -20,7 +20,7 @@ const t=s=>s?new Date(s*1000).toLocaleTimeString('uk'):'—';
 async function go(){const q=`city=${c.value}&district=${d.value}`;
  const s=await J(`api/state/${c.value}${d.value?'/'+d.value:''}.json`);
  document.getElementById('gen').textContent='оновлено '+t(s.generated)+' · джерело: '+SRC+' (live.yml щохвилини)';
- document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Дрони',red:'🔴 Ракети'}[s.final]}</b> (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel}${s.agree>1?' · підтверджують '+s.agree+' канали':''} · ${(s.channels||[]).length} каналів · тривоги: ${s.oblasts_src||'—'}</span></div>`;
+ document.body.className='L'+s.final;document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Загроза в області',orange:'🟠 Курс на ваше місто',red:'🔴 Небезпека поруч'}[s.final]}</b> (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel}${s.agree>1?' · підтверджують '+s.agree+' канали':''} · ${(s.channels||[]).length} каналів · тривоги: ${s.oblasts_src||'—'}</span></div>`;
  const g=await J(`api/targets/${c.value}.json`);const S=g.summary;
  document.getElementById('tg').innerHTML=`<div class=card style="border-color:#58a6ff"><b>🎯 Цілі (${g.targets.length})</b> · P(≤${g.user?g.user.R:15} км, 30 хв): дрони ${Math.round(S.p_drone[30]*100)}%, ракети ${Math.round(S.p_missile[30]*100)}%${S.eta_min!=null?' · ETA '+Math.round(S.eta_min)+' хв':''}<br>`+
   g.targets.map(x=>`<span class=mut>${x.label}${x.count>1?' ×'+x.count:''} · ${x.dist_km!=null?x.dist_km+' км':'—'} · курс ${x.heading!=null?x.heading+'°':'—'} (${Math.round(x.heading_conf*100)}%) · ${x.speed} км/год · P5/15/30 ${[5,15,30].map(T=>Math.round(x.p[T]*100)).join('/')}% · ETA ${x.eta_min??'—'} · ${x.src.join(',')}</span>`).join('<br>')+`<div class=mut>${g.attribution}</div></div>`;

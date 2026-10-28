@@ -6,8 +6,11 @@
 #define CH_B 3
 #define CH_SPK 4
 
-// ЧЕРВОНИЙ (ракети): миготливий червоний LED + сирена 8 с, нагадування щохвилини.
-// ЖОВТИЙ (дрони): «дихаючий» бурштиновий LED + короткі сигнали; якщо ціль поруч — довше і з нагадуванням.
+// Градація (без модальних вікон і кнопок — лише колір екрана, LED і звук):
+// ЖОВТИЙ — бурштиновий «дихаючий» LED + один м'який сигнал (якщо увімкнено «звук на жовтому»).
+// ПОМАРАНЧЕВИЙ — помаранчевий LED, що пульсує частіше + 3 коротких «біп», нагадування кожні 90 с.
+// ЧЕРВОНИЙ — миготливий червоний LED + сирена 8 с, нагадування щохвилини.
+// Дотик до картки стану на головному екрані глушить звук до наступного підвищення рівня.
 static Level s_level = LVL_GREEN;
 static bool s_near = false;
 static bool s_soundOn = false;
@@ -37,9 +40,9 @@ void notifyLevel(Level l, bool near) {
   s_level = l;
   s_near = near;
   s_t0 = millis();
-  s_soundOn = g_set.sound && l > LVL_GREEN;
-  s_soundUntil = s_t0 + (l == LVL_RED ? 8000 : near ? 3000 : 1200);
-  s_nextBeep = s_t0 + (l == LVL_RED ? 60000 : 90000);
+  s_soundOn = g_set.sound && (l >= LVL_ORANGE || (l == LVL_YELLOW && g_set.alertOnYellow));
+  s_soundUntil = s_t0 + (l == LVL_RED ? 8000 : l == LVL_ORANGE ? 1500 : 250);
+  s_nextBeep = l == LVL_RED ? s_t0 + 60000 : l == LVL_ORANGE ? s_t0 + 90000 : UINT32_MAX;
   if (l == LVL_GREEN && g_set.sound) {  // короткий «відбій»
     s_soundOn = true; s_soundUntil = s_t0 + 600;
   }
@@ -53,20 +56,22 @@ void notifyLoop() {
   // --- LED ---
   switch (s_level) {
     case LVL_RED: { bool on = (t / 250) % 2; ledRGB(on ? 255 : 20, 0, 0); break; }
-    case LVL_YELLOW: { uint8_t v = 40 + (uint8_t)(100 * (1 + sinf(t / (s_near ? 160.0f : 400.0f))) / 2); ledRGB(v, v / 2, 0); break; }
+    case LVL_ORANGE: { uint8_t v = 60 + (uint8_t)(195 * (1 + sinf(t / 150.0f)) / 2); ledRGB(v, v * 90 / 255, 0); break; }
+    case LVL_YELLOW: { uint8_t v = 40 + (uint8_t)(100 * (1 + sinf(t / 400.0f)) / 2); ledRGB(v, v * 3 / 4, 0); break; }
     default: ledRGB(0, t < 3000 ? 40 : 3, 0); break;
   }
   // --- звук ---
   if (s_soundOn && now < s_soundUntil) {
     if (s_level == LVL_RED) tone_(700 + (uint32_t)(500 * (1 + sinf(t / 180.0f)) / 2));  // сирена
-    else if (s_level == LVL_YELLOW) tone_(((t / 200) % 3) < 2 && (t / 200) % 2 == 0 ? 1100 : 0);
+    else if (s_level == LVL_ORANGE) tone_((t / 250) % 2 == 0 ? 1250 : 0);               // 3 коротких біп
+    else if (s_level == LVL_YELLOW) tone_(900);                                          // один м'який сигнал
     else tone_(t < 300 ? 880 : 1320);
   } else {
     tone_(0);
-    if (s_soundOn && s_level == LVL_RED && now > s_nextBeep) {  // нагадування щохвилини
+    if (s_soundOn && s_level == LVL_RED && now > s_nextBeep) {          // нагадування щохвилини
       s_t0 = now; s_soundUntil = now + 1500; s_nextBeep = now + 60000;
-    } else if (s_soundOn && s_level == LVL_YELLOW && s_near && now > s_nextBeep) {  // дрон поруч — раз на 1.5 хв
-      s_t0 = now; s_soundUntil = now + 1200; s_nextBeep = now + 90000;
-    } else if (now >= s_soundUntil && s_level != LVL_RED && !(s_level == LVL_YELLOW && s_near)) s_soundOn = false;
+    } else if (s_soundOn && s_level == LVL_ORANGE && now > s_nextBeep) {  // курс на місто — раз на 1.5 хв
+      s_t0 = now; s_soundUntil = now + 1500; s_nextBeep = now + 90000;
+    } else if (now >= s_soundUntil && s_level < LVL_ORANGE) s_soundOn = false;
   }
 }

@@ -2,13 +2,13 @@
  {
   "t": "Шахед курсом на Кременчук з боку Глобиного",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": true
  },
  {
   "t": "Шахед в районе Глобино",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false
  },
  {
@@ -26,13 +26,13 @@
  {
   "t": "Шахед над Молодіжним, вибухи! В укриття",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "red",
   "near": true
  },
  {
   "t": "2 шахеда заходят на город со стороны Кобеляк, на Раковку",
   "d": "rakivka",
-  "lvl": "yellow",
+  "lvl": "red",
   "near": true
  },
  {
@@ -56,19 +56,19 @@
  {
   "t": "Крилаті ракети над Кіровоградщиною",
   "d": "molod",
-  "lvl": "red",
+  "lvl": "orange",
   "near": false
  },
  {
   "t": "Мопед в районе Крюкова, летит на НПЗ",
   "d": "kryukiv",
-  "lvl": "yellow",
+  "lvl": "red",
   "near": true
  },
  {
   "t": "Мопед в районе Крюкова",
   "d": "revivka",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false
  },
  {
@@ -98,13 +98,13 @@
  {
   "t": "БпЛА в районі Світловодська, курс на ГЕС",
   "d": "zanasyp",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": true
  },
  {
   "t": "БпЛА в районі Світловодська",
   "d": "kryukiv",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false
  },
  {
@@ -214,7 +214,7 @@
  {
   "t": "крылатая над Полтавой",
   "d": "molod",
-  "lvl": "red",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -222,7 +222,7 @@
  {
   "t": "калибры с черного моря",
   "d": "molod",
-  "lvl": "red",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -238,7 +238,7 @@
  {
   "t": "Днепр ракета",
   "d": "molod",
-  "lvl": "red",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -254,7 +254,7 @@
  {
   "t": "Шахиды над Глобино",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -262,7 +262,7 @@
  {
   "t": "шахеды на светловодск",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -270,7 +270,7 @@
  {
   "t": "мопеды над Кременчугом",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -286,7 +286,7 @@
  {
   "t": "гудит над городом",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -294,7 +294,7 @@
  {
   "t": "дроны на светловодск",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "near": false,
   "far": false,
   "ow": false
@@ -374,7 +374,7 @@
  {
   "t": "БпЛА на Полтавщині курсом на Кременчук",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "ch": "kpszsu"
  },
  {
@@ -412,7 +412,7 @@
  {
   "t": "шахед над Глобино",
   "d": "molod",
-  "lvl": "yellow",
+  "lvl": "orange",
   "ch": "kudy_letyt"
  },
  {
@@ -433,5 +433,15 @@
   "d": "molod",
   "lvl": "red",
   "ch": "ppo_poltava"
+ },
+ {
+  "t": "Шахед над Кременчуком, вибухи",
+  "d": "molod",
+  "lvl": "red"
+ },
+ {
+  "t": "Дрони на Полтавщині",
+  "d": "molod",
+  "lvl": "yellow"
  }
 ]

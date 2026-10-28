@@ -190,10 +190,25 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
   ev.score = score;
   ev.near = score >= 7;
   if (score >= 3) {
-    ev.level = best >= 0 ? (Level)THREATS[best].level : LVL_YELLOW;
+    ev.cls = best >= 0 ? THREATS[best].level : CLS_DRONE;
     ev.kind = best >= 0 ? THREATS[best].kind : "Загроза";
+    if (distBonus == 4 || (distBonus >= 2 && (approach || escalate)) || (inCity && escalate)) ev.prox = 2;
+    else if (inCity || settlBonus >= 2 || ev.near) ev.prox = 1;
+    bool ballisticObl = best >= 0 && !strcmp(THREATS[best].type, "ballistic") && oblHit;
+    ev.level = levelOf(ev.cls, ev.prox, ev.oblastWide || ballisticObl, settlBonus > 0);
   }
   return ev;
+}
+
+Level levelOf(uint8_t cls, uint8_t prox, bool oblastWide, bool nearby) {
+  if (cls == CLS_MISSILE) return (prox >= 1 || oblastWide || nearby) ? LVL_RED : LVL_ORANGE;
+  return prox >= 2 ? LVL_RED : (prox == 1 ? LVL_ORANGE : LVL_YELLOW);
+}
+
+Level agedLevel(const PostEval& e, long ageMin) {
+  if (e.level <= LVL_YELLOW || e.cls != CLS_DRONE || e.oblastWide) return e.level;
+  int l = (int)e.level - (int)((ageMin > 0 ? ageMin : 0) / POST_AGE_STEP_MIN);
+  return (Level)(l < LVL_YELLOW ? LVL_YELLOW : l);
 }
 
 Level analyzeFeed(const TgPost* posts, int n, const CityDef* city, int district, time_t now,
@@ -208,10 +223,11 @@ Level analyzeFeed(const TgPost* posts, int n, const CityDef* city, int district,
     if (ageMin > POST_YELLOW_TTL_MIN) continue;
     PostEval e = analyzePost(p.text, city, district, remote);
     if (e.ignored) continue;
+    e.level = agedLevel(e, ageMin);
     if (e.clear && e.level == LVL_GREEN) { cur = LVL_GREEN; best = i; bestE = e; continue; }
     Level l = e.level;
     if (e.oblastWide && ageMin > POST_OBLAST_TTL_MIN) continue;
-    if (l == LVL_RED && ageMin > POST_RED_TTL_MIN) continue;   // ракети швидкі — старий пост неактуальний
+    if (e.cls == CLS_MISSILE && ageMin > POST_RED_TTL_MIN) continue;   // ракети швидкі — старий пост неактуальний
     if (l >= cur && l > LVL_GREEN) { cur = l; best = i; bestE = e; }
     else if (cur == LVL_GREEN && e.relevant) { best = i; bestE = e; }
   }

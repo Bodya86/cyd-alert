@@ -588,11 +588,12 @@ def threat_summary(targets):
          "p_missile": {T: comb("missile", T) for T in (5, 15, 30)}}
     etas = [d["eta_min"] for d in targets if d["eta_min"] is not None and d["p"][30] >= 0.1]
     s["eta_min"] = min(etas) if etas else None
+    # рівні як в analyzer: 2 — помаранчевий (ціль, ймовірно, пройде в радіусі R від вас), 3 — червоний
     lvl = 0
     if s["p_drone"][30] >= 0.15:
-        lvl = 1
-    if s["p_missile"][30] >= 0.10:     # ракети — вищі наслідки, нижчий поріг
         lvl = 2
+    if s["p_drone"][15] >= 0.5 or s["p_missile"][30] >= 0.10:     # дрон майже напевно поруч / ракети
+        lvl = 3
     s["level"] = lvl
     return s
 

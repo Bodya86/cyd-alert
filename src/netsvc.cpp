@@ -224,6 +224,7 @@ static bool fetchUbilling() {
 static Level parseLevel(const char* s) {
   if (!s) return LVL_GREEN;
   if (!strcmp(s, "red")) return LVL_RED;
+  if (!strcmp(s, "orange")) return LVL_ORANGE;
   if (!strcmp(s, "yellow")) return LVL_YELLOW;
   return LVL_GREEN;
 }
@@ -555,7 +556,7 @@ static void tgAggregate() {
     }
     Level L = b.lvl;
     int score = b.score + (agree >= 2 ? 1 : 0);
-    if (L == LVL_RED && agree < 2 && weight(best) < 50) L = LVL_YELLOW;
+    if (L == LVL_RED && agree < 2 && weight(best) < 50) L = LVL_ORANGE;   // лише малодовірене джерело — на щабель нижче
     g_state.tgLevel = L;
     g_state.tgScore = score;
     g_state.tgNear = b.near || score >= 7;

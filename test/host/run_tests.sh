@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 python3 ../../tools/gen_data.py
 python3 - <<'PY'
 import json
-L = {"green": "LVL_GREEN", "yellow": "LVL_YELLOW", "red": "LVL_RED"}
+L = {"green": "LVL_GREEN", "yellow": "LVL_YELLOW", "orange": "LVL_ORANGE", "red": "LVL_RED"}
 b = lambda v: -1 if v is None else int(v)
 out = ["// згенеровано з test/analyzer_cases.json (run_tests.sh)", "struct Case { const char* t; const char* d; Level l; int near, far, ow; const char* ch; };",
        "static const Case CASES[] = {"]

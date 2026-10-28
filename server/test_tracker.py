@@ -45,7 +45,7 @@ class TrackerTest(unittest.TestCase):
         remaining = 110 - 170 * 0.25 - 15
         self.assertAlmostEqual(d["eta_min"], remaining / 170 * 60, delta=6)
         s = tk.threat_summary(res)
-        self.assertEqual(s["level"], 1)
+        self.assertEqual(s["level"], 2)     # помаранчевий: дрон, ймовірно, пройде поруч з містом
 
     def test_precise_fixes_converge(self):
         tr = tk.Tracker(seed=11)
@@ -71,7 +71,7 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(d["cls"], "missile")
         self.assertGreater(d["p"][30], 0.05, d["p"])
         self.assertAlmostEqual(d["eta_min"], (330 - 800 * 6 / 60 - 15) / 800 * 60, delta=4)
-        self.assertEqual(tk.threat_summary([d])["level"], 2)
+        self.assertEqual(tk.threat_summary([d])["level"], 3)
 
     def test_two_targets_kept_apart(self):
         tr = tk.Tracker(seed=4)
@@ -129,7 +129,7 @@ class TrackerTest(unittest.TestCase):
         bal = [d for d in res if d["type"] == "ballistic"]
         self.assertEqual(len(bal), 1)
         self.assertGreaterEqual(bal[0]["p"][5], 0.5)
-        self.assertEqual(tk.threat_summary(res)["level"], 2)
+        self.assertEqual(tk.threat_summary(res)["level"], 3)
 
     def test_group_probability(self):
         one = dict(cls="drone", count=1, p={5: 0.2, 15: 0.2, 30: 0.2}, eta_min=10)

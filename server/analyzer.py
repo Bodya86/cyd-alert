@@ -11,8 +11,14 @@ FAR_KM = 150                           # місце далі — «далека 
 NEAR_KM = 60                           # для загальнонаціональних каналів: місце ближче — пост «наш»
 DEDUP_MIN = 10                         # одна подія з різних каналів: той самий тип+місце в межах 10 хв
 
-GREEN, YELLOW, RED = 0, 1, 2
-LEVEL_NAMES = {GREEN: "green", YELLOW: "yellow", RED: "red"}
+# Рівні за БЛИЗЬКІСТЮ до вас (екран фарбується відповідно, без модальних вікон):
+#   GREEN  — чисто;
+#   YELLOW — дрони в області / загальна загроза;
+#   ORANGE — ціль курсом на ваше місто («курс на Кременчук»), ракети/КАБ в області;
+#   RED    — ціль над / курсом на ваш район, вибухи в місті, ракети поруч, балістика на область.
+GREEN, YELLOW, ORANGE, RED = 0, 1, 2, 3
+LEVEL_NAMES = {GREEN: "green", YELLOW: "yellow", ORANGE: "orange", RED: "red"}
+CLS_DRONE, CLS_MISSILE = 1, 2     # клас загрози (rules.json level yellow/red) — окремо від рівня близькості
 # ЖОВТИЙ = дрони (шахеди/БпЛА) або невідома ціль, ЧЕРВОНИЙ = ракети/балістика/КАБ/авіація
 
 
@@ -109,6 +115,8 @@ class PostEval:
     local: bool = False        # згадано ваше місто/район/село/область або місце ближче NEAR_KM
     place: str = ""            # ключ місця для дедуплікації між каналами
     threat: str = ""           # тип загрози (ballistic/missile/kab/drone/...)
+    cls: int = 0               # CLS_DRONE / CLS_MISSILE (0 — немає)
+    prox: int = 0              # 0 — область/загально, 1 — місто/курс на місто/поруч, 2 — ваш район/над вами
     reasons: list = field(default_factory=list)
 
     @property
@@ -271,9 +279,33 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
     ev.score = score
     ev.near = score >= 7
     if score >= 3:
-        ev.level = best[0] if best else YELLOW
+        ev.cls = best[0] if best else CLS_DRONE
         ev.kind = best[1].get("kind", best[1]["label"]) if best else "Загроза"
+        # близькість: 2 — ваш район (або сусідній сектор із курсом/вибухами), вибухи в місті; 1 — місто/≤15 км/курс
+        if dist_bonus == 4 or (dist_bonus >= 2 and (approach or escalate)) or (in_city and escalate):
+            ev.prox = 2
+        elif in_city or settl_bonus >= 2 or ev.near:
+            ev.prox = 1
+        ballistic_obl = ev.threat == "ballistic" and obl_hit      # «балістика на Полтавщину» — хвилини до удару
+        ev.level = level_of(ev.cls, ev.prox, ev.oblast_wide or ballistic_obl, bool(settl_bonus))
     return ev
+
+
+AGE_STEP_MIN = 10   # дрон рухається: кожні 10 хв без нових постів близькість падає на щабель (червоний → помаранчевий → жовтий)
+
+
+def aged_level(e, age_min):
+    if e.level <= YELLOW or e.cls != CLS_DRONE or e.oblast_wide:
+        return e.level
+    return max(YELLOW, e.level - int(max(0, age_min) // AGE_STEP_MIN))
+
+
+def level_of(cls, prox, oblast_wide=False, nearby=False):
+    """Клас загрози + близькість → рівень. Дрон: область → жовтий, місто → помаранчевий, район → червоний.
+    Ракета/КАБ/балістика: область → помаранчевий, місто/поруч/«вся область» (балістика) → червоний."""
+    if cls == CLS_MISSILE:
+        return RED if (prox >= 1 or oblast_wide or nearby) else ORANGE
+    return (YELLOW, ORANGE, RED)[min(prox, 2)]
 
 
 def analyze_feed(posts, city_id=None, district_id=None, now=None, remote=False):
@@ -289,13 +321,14 @@ def analyze_feed(posts, city_id=None, district_id=None, now=None, remote=False):
         e = analyze_post(p["text"], city_id, district_id, remote)
         if e.ignored:
             continue
+        e.level = aged_level(e, age_min)
         if e.clear and e.level == GREEN:
             cur, best, best_ev = GREEN, p, e
             continue
         lvl = e.level
         if e.oblast_wide and age_min > OBLAST_TTL_MIN:
             continue
-        if lvl == RED and age_min > RED_TTL_MIN:
+        if e.cls == CLS_MISSILE and age_min > RED_TTL_MIN:
             continue   # ракети швидкі — старий пост неактуальний
         if lvl >= cur and lvl > GREEN:
             cur, best, best_ev = lvl, p, e
@@ -307,7 +340,7 @@ def analyze_feed(posts, city_id=None, district_id=None, now=None, remote=False):
 def _live(e, age_min):
     if e.oblast_wide and age_min > OBLAST_TTL_MIN:
         return False
-    if e.level == RED and age_min > RED_TTL_MIN:
+    if e.cls == CLS_MISSILE and age_min > RED_TTL_MIN:
         return False
     return age_min <= YELLOW_TTL_MIN
 
@@ -335,6 +368,7 @@ def analyze_multi(feeds, city_id=None, district_id=None, now=None):
             e = analyze_post(p["text"], city_id, district_id, remote)
             if e.ignored:
                 continue
+            e.level = aged_level(e, age)
             if e.clear and e.level == GREEN:
                 if not remote or e.local:
                     last_clear = max(last_clear, ts)
@@ -370,7 +404,7 @@ def analyze_multi(feeds, city_id=None, district_id=None, now=None):
             e.near = e.near or e.score >= 7
             e.reasons.append(f"{cl['n']} канали")
         if cl["conf"] < 0.5 and lvl == RED:
-            lvl = YELLOW
+            lvl = ORANGE          # лише малодовірені канали — на щабель нижче
         e.level = lvl
         k = (lvl if lvl > GREEN else -1, cl["conf"], cl["ts"])
         if k > best_key:

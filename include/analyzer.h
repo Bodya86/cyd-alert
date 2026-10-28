@@ -2,11 +2,16 @@
 #include "app.h"
 
 #define POST_OBLAST_TTL_MIN 10
+#define POST_AGE_STEP_MIN 10   // дрон рухається: кожні 10 хв без нових постів рівень падає на щабель (не нижче жовтого)
+#define CLS_DRONE 1
+#define CLS_MISSILE 2
 #define FAR_PLACE_KM 150
 #define NEAR_PLACE_KM 60
 struct PostEval {
   int score = 0;
-  Level level = LVL_GREEN;    // ЖОВТИЙ = дрони/невідома ціль, ЧЕРВОНИЙ = ракети/КАБ/авіація
+  Level level = LVL_GREEN;    // рівень близькості (див. levelOf)
+  uint8_t cls = 0;            // клас загрози: CLS_DRONE / CLS_MISSILE (0 — немає)
+  uint8_t prox = 0;           // 0 — область, 1 — місто/≤15 км/курс на місто, 2 — ваш район / вибухи в місті
   bool near = false;          // бал >= 7: ціль у вашому районі / курс на вас
   const char* kind = "";      // "Дрони", "Ракети", "КАБ", ...
   bool clear = false;     // пост про відбій / ціль пролетіла
@@ -21,6 +26,8 @@ struct PostEval {
   char reason[120] = {0};
 };
 
+Level levelOf(uint8_t cls, uint8_t prox, bool oblastWide, bool nearby);
+Level agedLevel(const PostEval& e, long ageMin);
 // Оцінка одного посту для міста/району користувача (district = -1 — все місто)
 // remote = true: загальнонаціональний або чужий обласний канал — без згадки вашої території пост лише інформаційний
 PostEval analyzePost(const char* text, const CityDef* city, int district, bool remote = false);

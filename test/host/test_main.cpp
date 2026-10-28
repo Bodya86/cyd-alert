@@ -18,7 +18,7 @@ static void expect(const char* txt, const char* d, Level want, int near = -1, in
   if (!ok) fails++;
   printf("%s [%s] score=%d lvl=%s near=%d kind=%s clear=%d ign=%d | %s | %s\n", ok ? "OK  " : "FAIL", d, e.score, levelName(e.level), e.near, e.kind, e.clear, e.ignored, e.reason, txt);
 }
-const char* levelName(Level l) { return l == LVL_RED ? "RED" : l == LVL_YELLOW ? "YELLOW" : "GREEN"; }
+const char* levelName(Level l) { return l == LVL_RED ? "RED" : l == LVL_ORANGE ? "ORANGE" : l == LVL_YELLOW ? "YELLOW" : "GREEN"; }
 
 #include "outage.h"
 #include <stdlib.h>
@@ -50,7 +50,7 @@ static void outageTests() {
 
 int main(int argc, char** argv) {
   outageTests();
-  // ЖОВТИЙ = дрони, ЧЕРВОНИЙ = ракети/КАБ/авіація, ЗЕЛЕНИЙ = чисто
+  // ЗЕЛЕНИЙ = чисто, ЖОВТИЙ = загроза в області, ПОМАРАНЧЕВИЙ = курс на місто, ЧЕРВОНИЙ = ваш район / ракети поруч
   for (const Case& c : CASES) expect(c.t, c.d, c.l, c.near, c.far, c.ow, c.ch);   // test/analyzer_cases.json
   {  // балістика «хз звідки» — червоний 10 хв; «харьков ракета» — лише інформація
     static TgPost fp[2];
@@ -62,6 +62,20 @@ int main(int argc, char** argv) {
     fp[0].ts = now - 12 * 60;
     PostEval be;
     check(analyzeFeed(fp, 2, k, dist(k, "molod"), now, nullptr, &be) == LVL_GREEN && be.far, "feed: oblast-wide expires 10 min, far stays info");
+  }
+
+  {  // близькість «старіє»: дрон над вашим районом — червоний, через 10 хв помаранчевий, через 20 — жовтий
+    static TgPost dp[1];
+    time_t now = 1800000000;
+    const CityDef* k = city("kremenchuk");
+    dp[0].id = 1; dp[0].ts = now - 60; strlcpy(dp[0].text, "Шахед над Молодіжним", sizeof(dp[0].text));
+    check(analyzeFeed(dp, 1, k, dist(k, "molod"), now, nullptr, nullptr) == LVL_RED, "feed: drone over district red");
+    dp[0].ts = now - 12 * 60;
+    check(analyzeFeed(dp, 1, k, dist(k, "molod"), now, nullptr, nullptr) == LVL_ORANGE, "feed: 12 min old -> orange");
+    dp[0].ts = now - 22 * 60;
+    check(analyzeFeed(dp, 1, k, dist(k, "molod"), now, nullptr, nullptr) == LVL_YELLOW, "feed: 22 min old -> yellow");
+    dp[0].ts = now - 60; strlcpy(dp[0].text, "Шахед курсом на Кременчук", sizeof(dp[0].text));
+    check(analyzeFeed(dp, 1, k, dist(k, "molod"), now, nullptr, nullptr) == LVL_ORANGE, "feed: course to city orange");
   }
 
   if (argc > 1) {

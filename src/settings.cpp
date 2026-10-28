@@ -10,7 +10,7 @@ void stateLock() { if (!s_mtx) s_mtx = xSemaphoreCreateRecursiveMutex(); xSemaph
 void stateUnlock() { xSemaphoreGiveRecursive(s_mtx); }
 
 const char* levelName(Level l) {
-  switch (l) { case LVL_RED: return "РАКЕТИ"; case LVL_YELLOW: return "ДРОНИ"; default: return "ЧИСТО"; }
+  switch (l) { case LVL_RED: return "НЕБЕЗПЕКА"; case LVL_ORANGE: return "КУРС НА МІСТО"; case LVL_YELLOW: return "ЗАГРОЗА"; default: return "ЧИСТО"; }
 }
 
 void settingsLoad() {
@@ -138,7 +138,8 @@ void regionsFromOblasts(AppState& s) {
   s.regionsFine = false;
 }
 
-static Level regionLevel(char c) { return (c == 'R' || c == 'r') ? LVL_RED : (c == 'Y' || c == 'y') ? LVL_YELLOW : LVL_GREEN; }
+// офіційна тривога: ракетна в районі — помаранчевий (точна ціль невідома), дрони/невідомо — жовтий
+static Level regionLevel(char c) { return (c == 'R' || c == 'r') ? LVL_ORANGE : (c == 'Y' || c == 'y') ? LVL_YELLOW : LVL_GREEN; }
 
 // Підсумковий рівень для адреси користувача:
 //  • офіційна тривога у вашому районі (або області, якщо район невідомий) — рівень за типом загрози

@@ -97,7 +97,8 @@ def regions_from_oblasts(obl):
 
 
 def region_status(rs, idx):
-    """→ (level 0/1/2, partial)"""
+    """→ (level 0/1/2 = green/yellow/orange, partial). Офіційна «ракетна» тривога в районі — помаранчевий:
+    точна ціль невідома; червоний ставить лише аналіз постів/трекер (ціль над вашим районом)."""
     if not rs or idx is None or not (0 <= idx < len(rs)):
         return 0, False
     c = rs[idx]

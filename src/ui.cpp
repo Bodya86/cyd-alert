@@ -24,6 +24,7 @@ LV_FONT_DECLARE(font_ua_40)
 #define C_GREEN   0x2EA043
 #define C_YELLOW  0xF2C94C
 #define C_RED     0xE5484D
+#define C_ORANGE  0xFF8C1A
 #define C_AMBER   0xF59E0B
 #define C_MAP_N   0x263445
 #define C_MAP_ME  0x3A5878
@@ -40,9 +41,14 @@ LV_FONT_DECLARE(font_ua_40)
 #define C_OUT_MB  0xF59E0B   // можливе відключення
 
 static lv_color_t col(uint32_t h) { return lv_color_hex(h); }
-static uint32_t levelColor(Level l) { return l == LVL_RED ? C_RED : (l == LVL_YELLOW ? C_YELLOW : C_GREEN); }
+static uint32_t levelColor(Level l) {
+  return l == LVL_RED ? C_RED : l == LVL_ORANGE ? C_ORANGE : l == LVL_YELLOW ? C_YELLOW : C_GREEN;
+}
+// тло головного екрана за рівнем: колір загрози «заливає» весь екран (без модальних вікон)
+static const uint32_t LEVEL_BG[4] = {C_BG, 0x17140A, 0x261406, 0x3A0A0E};
+static const uint32_t LEVEL_CARD[4] = {0x10261A, 0x332A08, 0x40220A, 0x5A1016};
 
-enum ScreenKind { SK_NONE, SK_SETUP, SK_MAIN, SK_DETAIL, SK_ALERT, SK_SETTINGS, SK_OUTAGE };
+enum ScreenKind { SK_NONE, SK_SETUP, SK_MAIN, SK_DETAIL, SK_SETTINGS, SK_OUTAGE };
 static ScreenKind s_kind = SK_NONE;
 
 // ------------------------------- Помічники -------------------------------
@@ -496,7 +502,10 @@ static char s_rg[MAP_REGION_COUNT + 1];
 static lv_color_t s_pal[256];
 static lv_obj_t* s_main = nullptr;
 static lv_obj_t *s_map, *s_lblPlace, *s_lblTime, *s_lblWifi, *s_lblCount, *s_lblCountSub, *s_lblSrc, *s_card, *s_cardBar,
-    *s_cardTitle, *s_cardText, *s_marker, *s_outBox, *s_outState, *s_outTime, *s_outBar;
+    *s_cardTitle, *s_cardText, *s_marker, *s_outBox, *s_outState, *s_outTime, *s_outBar, *s_frame;
+static Level s_uiLevel = LVL_GREEN;      // рівень, яким зараз пофарбовано головний екран
+static Level s_preview = LVL_GREEN;      // тест кольору з налаштувань
+static uint32_t s_previewUntil = 0;
 static uint32_t s_seenVersion = UINT32_MAX;
 static OutageInfo s_out;   // знімок для головного екрана / екрана графіка
 
@@ -516,7 +525,7 @@ static void rebuildPalette() {
   for (int i = 0; i < MAP_REGION_COUNT; i++) s_pal[i] = col(regionColor(i, me));
   s_pal[MAP_RBORDER] = col(C_MAP_RBD);
   s_pal[MAP_BORDER] = col(C_MAP_BRD);
-  s_pal[MAP_BG] = col(C_BG);
+  s_pal[MAP_BG] = col(LEVEL_BG[s_uiLevel]);
 }
 
 static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c);
@@ -648,10 +657,11 @@ static void markerAnimCb(void* o, int32_t v) {
   lv_obj_set_style_shadow_opa((lv_obj_t*)o, 255 - v * 40, 0);
 }
 
-static void mainDeleted(lv_event_t*) { s_main = nullptr; }
+static void frameAnimCb(void* o, int32_t v);
+static void mainDeleted(lv_event_t*) { s_main = nullptr; s_frame = nullptr; lv_anim_del(nullptr, frameAnimCb); }
 static void settingsBtnCb(lv_event_t*) { showSettings(); }
 static void showDetail();
-static void cardCb(lv_event_t*) { showDetail(); }
+static void cardCb(lv_event_t*) { notifySilence(); showDetail(); }   // дотик до картки — тиша до наступного підвищення
 static void showOutage();
 static void outBoxCb(lv_event_t*) { showOutage(); }
 
@@ -669,6 +679,34 @@ static lv_obj_t* legendRow(lv_obj_t* p, int y, uint32_t c, const char* t, int x 
 }
 
 static void updateMain(bool full);
+
+// пульс рамки/тла: червоний — яскраво і помітно, помаранчевий — м'якше, жовтий/зелений — без анімації
+static void frameAnimCb(void* o, int32_t v) {
+  lv_obj_t* f = (lv_obj_t*)o;
+  Level L = s_uiLevel;
+  if (L == LVL_RED) {
+    lv_obj_set_style_border_color(f, lv_color_mix(col(0xFF3B3F), col(0x7A0010), v), 0);
+    if (s_main) lv_obj_set_style_bg_color(s_main, lv_color_mix(col(0x4A0B10), col(LEVEL_BG[LVL_RED]), v), 0);
+  } else if (L == LVL_ORANGE) {
+    lv_obj_set_style_border_color(f, lv_color_mix(col(C_ORANGE), col(0x8A4008), v), 0);
+  }
+}
+
+static void applyLevelTint(Level L) {
+  s_uiLevel = L;
+  static const uint8_t bw[4] = {0, 1, 3, 5};
+  lv_obj_set_style_bg_color(s_main, col(LEVEL_BG[L]), 0);
+  lv_obj_set_style_border_width(s_frame, bw[L], 0);
+  lv_obj_set_style_border_color(s_frame, col(levelColor(L)), 0);
+  lv_obj_set_style_border_opa(s_frame, L == LVL_YELLOW ? LV_OPA_60 : LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(s_card, col(LEVEL_CARD[L]), 0);
+  lv_obj_set_style_bg_color(s_cardBar, col(levelColor(L)), 0);
+  lv_obj_set_size(s_cardBar, L >= LVL_ORANGE ? 10 : 6, 46);
+  lv_obj_set_style_text_color(s_cardTitle, col(levelColor(L)), 0);
+  lv_obj_set_style_text_color(s_cardText, col(L == LVL_RED ? 0xFFD9DA : L == LVL_ORANGE ? 0xFFE2C4 : C_MUTED), 0);
+  lv_obj_set_pos(s_cardTitle, L >= LVL_ORANGE ? 18 : 14, 3);
+  lv_obj_set_pos(s_cardText, L >= LVL_ORANGE ? 18 : 14, 26);
+}
 
 static void showMain() {
   lv_obj_t* scr = mkScreen(SK_MAIN);
@@ -817,11 +855,32 @@ static void showMain() {
   lv_obj_set_size(s_cardBar, 6, 46);
   lv_obj_set_style_bg_opa(s_cardBar, LV_OPA_COVER, 0);
   s_cardTitle = mkLabel(s_card, "", &font_ua_18, C_TEXT);
+  lv_obj_set_width(s_cardTitle, 290);
+  lv_label_set_long_mode(s_cardTitle, LV_LABEL_LONG_DOT);
   lv_obj_set_pos(s_cardTitle, 14, 3);
   s_cardText = mkLabel(s_card, "", &font_ua_12, C_MUTED);
   lv_obj_set_width(s_cardText, 290);
   lv_label_set_long_mode(s_cardText, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_obj_set_pos(s_cardText, 14, 26);
+
+  // рамка рівня поверх усього екрана (не перехоплює дотики): помаранчевий — тонка, червоний — товста, пульсує
+  s_frame = lv_obj_create(scr);
+  lv_obj_remove_style_all(s_frame);
+  lv_obj_set_size(s_frame, 320, 240);
+  lv_obj_set_pos(s_frame, 0, 0);
+  lv_obj_set_style_border_side(s_frame, LV_BORDER_SIDE_FULL, 0);
+  lv_obj_set_style_radius(s_frame, 6, 0);
+  lv_obj_clear_flag(s_frame, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(s_frame, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_frame, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_anim_t fa; lv_anim_init(&fa);
+  lv_anim_set_var(&fa, s_frame);
+  lv_anim_set_exec_cb(&fa, frameAnimCb);
+  lv_anim_set_values(&fa, 0, 255);
+  lv_anim_set_time(&fa, 700);
+  lv_anim_set_playback_time(&fa, 700);
+  lv_anim_set_repeat_count(&fa, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_start(&fa);
 
   s_seenVersion = UINT32_MAX;
   updateMain(true);
@@ -849,7 +908,6 @@ static void updateMain(bool full) {
     s_out = snap.outage;
     s_ntgt = snap.trkOk ? snap.ntgt : 0;
     memcpy(s_tgt, snap.tgt, sizeof(s_tgt));
-    rebuildPalette();
     lv_obj_invalidate(s_map);
     int cnt = 0;
     if (snap.regionsFine) {
@@ -862,23 +920,26 @@ static void updateMain(bool full) {
     if (snap.alertsOk) lv_label_set_text_fmt(s_lblCount, "%d", cnt);
     else lv_label_set_text(s_lblCount, "?");
 
-    Level L = snap.level;
-    static const uint32_t cardBg[3] = {0x10261A, 0x332A08, 0x3A0F12};
-    lv_obj_set_style_bg_color(s_card, col(cardBg[L]), 0);
-    lv_obj_set_style_bg_color(s_cardBar, col(levelColor(L)), 0);
+    bool preview = s_previewUntil && (int32_t)(millis() - s_previewUntil) < 0;
+    Level L = preview ? s_preview : snap.level;
+    applyLevelTint(L);
+    rebuildPalette();
     const char* sub;
     bool off = snap.offLevel > LVL_GREEN;
     bool tgDrives = snap.tgLevel >= L && snap.tgLevel > LVL_GREEN && snap.tgScore >= 3;
-    if (L == LVL_RED && snap.trkOk && snap.trkLevel == LVL_RED && !off && !tgDrives) sub = snap.pBallistic >= 15 ? "балістика — в укриття!" : "ракета може пролетіти поруч";
-    else if (L == LVL_RED) sub = snap.tgNear && tgDrives ? "ракетна загроза поруч" : off ? (snap.offLevel == LVL_RED ? "ракетна небезпека в районі" : "загроза ракет / КАБ") : "ракети — будьте в укритті";
-    else if (L == LVL_YELLOW && snap.trkOk && snap.trkLevel == LVL_YELLOW && !off && !tgDrives) sub = "дрон може пролетіти поруч";
-    else if (L == LVL_YELLOW) sub = snap.tgNear && tgDrives ? "дрони поруч з вами" : off ? (snap.offPartial ? "тривога в частині району" : (userRegion() >= 0 ? "тривога у вашому районі" : "тривога в області")) : "активність дронів поруч";
+    bool trkDrives = snap.trkOk && snap.trkLevel >= L && !tgDrives;
+    bool drone = !strcmp(snap.tgKind, "Дрони") || !snap.tgKind[0];
+    if (preview) sub = "тест кольору екрана";
+    else if (L == LVL_RED && trkDrives) sub = snap.pBallistic >= 15 ? "балістика по області" : snap.pMissile > snap.pDrone ? "ракета може пролетіти поруч" : "дрон наближається до вас";
+    else if (L == LVL_RED) sub = tgDrives ? (drone ? "ціль над вашим районом" : snap.tgNear ? "ракети / КАБ поруч" : "ракетна загроза області") : "небезпека поруч";
+    else if (L == LVL_ORANGE && trkDrives) sub = "ціль може пролетіти поруч";
+    else if (L == LVL_ORANGE) sub = tgDrives ? (drone ? "ціль курсом на ваше місто" : "ракети / КАБ в області") : off ? "ракетна тривога в районі" : "загроза наближається";
+    else if (L == LVL_YELLOW) sub = tgDrives ? "дрони в області" : off ? (snap.offPartial ? "тривога в частині району" : (userRegion() >= 0 ? "тривога у вашому районі" : "тривога в області")) : "загроза в області";
     else {
       char os = userOblastStatus();
       sub = !snap.alertsOk ? "немає даних" : (os == 'A' || os == 'P' || os == 'R' || os == 'Y') ? "тривога в області, не у вас" : "тривоги немає";
     }
     lv_label_set_text_fmt(s_cardTitle, "%s  ·  %s", levelName(L), sub);
-    lv_obj_set_style_text_color(s_cardTitle, col(levelColor(L)), 0);
     String line;
     if (snap.tgText[0]) {
       line = fmtTime(snap.tgTime) + "  " + snap.tgText;
@@ -947,8 +1008,8 @@ static void showDetail() {
   char os = userOblastStatus();
   const char* osTxt = os == 'A' || os == 'R' ? "тривога" : os == 'Y' ? "попередня загроза" : os == 'P' ? "часткова тривога" : os == 'N' ? "тривоги немає" : "невідомо";
   int me = userRegion();
-  const char* offTxt = s.offLevel == LVL_RED ? "ракети / КАБ" : s.offLevel == LVL_YELLOW ? (s.regionsFine ? "дрони / тип невідомий" : "тривога (тип невідомий)") : "тривоги немає";
-  static const char* lvlTxt[3] = {"Чисто", "Дрони (БпЛА)", "Ракети / КАБ"};
+  const char* offTxt = s.offLevel >= LVL_ORANGE ? "ракети / КАБ" : s.offLevel == LVL_YELLOW ? (s.regionsFine ? "дрони / тип невідомий" : "тривога (тип невідомий)") : "тривоги немає";
+  static const char* lvlTxt[4] = {"Чисто", "Загроза в області", "Курс на ваше місто", "Небезпека поруч"};
   String t1 = String(s.level == LVL_GREEN ? LV_SYMBOL_OK " " : LV_SYMBOL_WARNING " ") + lvlTxt[s.level];
   lv_obj_t* l = mkLabel(cont, t1.c_str(), &font_ua_26, levelColor(s.level));
   String t2 = userPlaceName();
@@ -979,65 +1040,10 @@ static void showDetail() {
 }
 
 // ======================================================================================
-//                                Повноекранне сповіщення
+//                     Стан сповіщень (без модальних вікон — лише колір екрана)
 // ======================================================================================
 static Level s_lastLevel = LVL_GREEN;
 static time_t s_lastAlertTs = 0;
-static bool s_testMode = false;
-
-static void alertOkCb(lv_event_t*) { notifySilence(); s_testMode = false; showMain(); }
-static void alertBgAnim(void* o, int32_t v) {
-  lv_obj_set_style_bg_color((lv_obj_t*)o, lv_color_mix(col(0xFF3B3F), col(0x7A0010), v), 0);
-}
-
-// ЧЕРВОНИЙ — ракети/КАБ (миготливий червоний фон), ЖОВТИЙ — дрони (бурштиновий фон)
-static void showAlert(Level L, const char* text, time_t ts, const char* reason, bool near) {
-  lv_obj_t* scr = mkScreen(SK_ALERT);
-  bool red = L == LVL_RED;
-  uint32_t fg = red ? 0xFFFFFF : 0x1A1400;
-  lv_obj_set_style_bg_color(scr, col(red ? 0xC0151E : C_YELLOW), 0);
-  if (red) {
-    lv_anim_t a; lv_anim_init(&a);
-    lv_anim_set_var(&a, scr); lv_anim_set_exec_cb(&a, alertBgAnim);
-    lv_anim_set_values(&a, 0, 255); lv_anim_set_time(&a, 550); lv_anim_set_playback_time(&a, 550);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE); lv_anim_start(&a);
-  }
-  lv_obj_t* ic = mkLabel(scr, LV_SYMBOL_WARNING, &font_ua_40, fg);
-  lv_obj_set_pos(ic, 12, 10);
-  lv_obj_t* t = mkLabel(scr, red ? "РАКЕТНА НЕБЕЗПЕКА" : "ДРОНИ / БпЛА", &font_ua_26, fg);
-  lv_obj_set_width(t, 262); lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(t, 52, 8);
-  String sub = String(red ? (near ? "Ракети/КАБ поруч: " : "Ракети / КАБ: ") : (near ? "Шахеди поруч: " : "Шахеди / БпЛА: ")) + userPlaceName();
-  lv_obj_t* s = mkLabel(scr, sub.c_str(), &font_ua_14, fg);
-  lv_obj_set_width(s, 260); lv_label_set_long_mode(s, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(s, 52, 40);
-
-  lv_obj_t* box = lv_obj_create(scr);
-  lv_obj_set_size(box, 304, 120);
-  lv_obj_set_pos(box, 8, 66);
-  lv_obj_set_style_bg_color(box, col(0x000000), 0);
-  lv_obj_set_style_bg_opa(box, red ? LV_OPA_40 : LV_OPA_10, 0);
-  lv_obj_set_style_border_width(box, 0, 0);
-  lv_obj_set_style_radius(box, 12, 0);
-  lv_obj_set_style_pad_all(box, 8, 0);
-  String body;
-  if (reason && reason[0]) body = String("• ") + reason + "\n";
-  if (text && text[0]) body += fmtTime(ts) + "  " + text;
-  else body += red ? "Ракетна небезпека! Негайно прямуйте в укриття."
-                   : (near ? "Дрони поруч з вами. Пройдіть в укриття, тримайтеся далі від вікон."
-                           : "Повітряна тривога (дрони або тип не уточнено). Слідкуйте за оновленнями.");
-  lv_obj_t* bl = mkLabel(box, body.c_str(), &font_ua_14, fg);
-  lv_obj_set_width(bl, 284); lv_label_set_long_mode(bl, LV_LABEL_LONG_WRAP);
-
-  lv_obj_t* b = lv_btn_create(scr);
-  lv_obj_set_size(b, 220, 40);
-  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 0, -8);
-  lv_obj_set_style_bg_color(b, col(red ? 0xFFFFFF : 0x1A1400), 0);
-  lv_obj_set_style_radius(b, 20, 0);
-  lv_obj_add_event_cb(b, alertOkCb, LV_EVENT_CLICKED, nullptr);
-  lv_obj_center(mkLabel(b, red || near ? "ЗРОЗУМІВ, В УКРИТТЯ" : "ЗРОЗУМІВ", &font_ua_14, red ? 0xC0151E : C_YELLOW));
-  lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_NONE, 0, 0, true);
-}
 
 // ======================================================================================
 //                                      Налаштування
@@ -1131,8 +1137,11 @@ static void setSrvCb(lv_event_t*) {
 static void setTokCb(lv_event_t*) {
   showTextEdit("Токен alerts.in.ua", g_set.token, "порожньо = ubilling.net.ua", [](const String& v) { g_set.token = v; });
 }
-static void testYCb(lv_event_t*) { s_testMode = true; notifyTest(LVL_YELLOW); showAlert(LVL_YELLOW, "Тестове повідомлення: шахеди курсом на Кременчук з боку Глобиного", time(nullptr), "Шахед/БпЛА, курс", true); }
-static void testRCb(lv_event_t*) { s_testMode = true; notifyTest(LVL_RED); showAlert(LVL_RED, "Тестове повідомлення: ракета на місто, вибухи, всі в укриття!", time(nullptr), "Ракета, ваш район, вибухи/ППО", true); }
+// тест: 8 с головний екран у кольорі рівня + відповідний звук/LED, потім — повернення до реального стану
+static void testLevel(Level L) { s_preview = L; s_previewUntil = millis() + 8000; notifyTest(L); showMain(); }
+static void testYCb(lv_event_t*) { testLevel(LVL_YELLOW); }
+static void testOCb(lv_event_t*) { testLevel(LVL_ORANGE); }
+static void testRCb(lv_event_t*) { testLevel(LVL_RED); }
 static void setOutCb(lv_event_t*);
 static void resetCb(lv_event_t*) {
   static const char* btns[] = {"Скинути", "Скасувати", ""};
@@ -1198,7 +1207,7 @@ static void showSettings() {
     g_set.sound = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  r = settingRow(list, "Екран на жовтому рівні");
+  r = settingRow(list, "Сигнал на жовтому рівні");
   sw = lv_switch_create(r);
   lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
   if (g_set.alertOnYellow) lv_obj_add_state(sw, LV_STATE_CHECKED);
@@ -1206,8 +1215,9 @@ static void showSettings() {
     g_set.alertOnYellow = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  mkListBtn(list, LV_SYMBOL_PLAY, "Тест: дрони (жовтий)", testYCb, nullptr);
-  mkListBtn(list, LV_SYMBOL_PLAY, "Тест: ракети (червоний)", testRCb, nullptr);
+  mkListBtn(list, LV_SYMBOL_PLAY, "Тест: загроза в області (жовтий)", testYCb, nullptr);
+  mkListBtn(list, LV_SYMBOL_PLAY, "Тест: курс на місто (помаранчевий)", testOCb, nullptr);
+  mkListBtn(list, LV_SYMBOL_PLAY, "Тест: небезпека поруч (червоний)", testRCb, nullptr);
   mkListBtn(list, LV_SYMBOL_TRASH, "Скинути всі налаштування", resetCb, nullptr);
   String info = "IP " + WiFi.localIP().toString() + " · RAM " + String(ESP.getFreeHeap() / 1024) + " КБ · v1.1";
   lv_list_add_text(list, info.c_str());
@@ -1445,26 +1455,28 @@ void uiLoop() {
   char text[TG_TEXT_MAX]; strlcpy(text, g_state.tgText, sizeof(text));
   char reason[120]; strlcpy(reason, g_state.tgReason, sizeof(reason));
   stateUnlock();
-  static bool s_lastNear = false;
 
-  bool canInterrupt = s_kind == SK_MAIN || s_kind == SK_DETAIL || s_kind == SK_ALERT || s_kind == SK_OUTAGE;
-  if (!s_testMode && g_set.configured() && canInterrupt) {
-    if (L > s_lastLevel || (L == LVL_YELLOW && near && !s_lastNear)) {   // ескалація або дрон підлетів
+  // тест кольору завершився — повертаємо реальний рівень
+  if (s_previewUntil && (int32_t)(now - s_previewUntil) >= 0) {
+    s_previewUntil = 0;
+    notifyLevel(L, near); notifySilence();
+    if (s_kind == SK_MAIN) updateMain(true);
+  }
+  bool onInfo = s_kind == SK_MAIN || s_kind == SK_DETAIL || s_kind == SK_OUTAGE;
+  if (!s_previewUntil && g_set.configured() && onInfo) {
+    if (L > s_lastLevel) {   // ескалація: звук/LED за рівнем, екран сам перефарбовується
       notifyLevel(L, near);
-      if (L == LVL_RED || g_set.alertOnYellow || near) showAlert(L, text, ts, reason, near);
+      if (L >= LVL_ORANGE && s_kind != SK_MAIN) showMain();   // з деталей/графіка — назад на кольоровий головний
       s_lastAlertTs = ts;
-    } else if (L == LVL_RED && ts && ts != s_lastAlertTs) {  // новий «ракетний» пост
+    } else if (L == LVL_RED && ts && ts != s_lastAlertTs) {  // новий пост про небезпеку поруч — сирена ще раз
       notifyLevel(L, near);
-      showAlert(L, text, ts, reason, near);
       s_lastAlertTs = ts;
     } else if (L < s_lastLevel) {
       notifyLevel(L, near);
-      if (s_kind == SK_ALERT) showMain();
       if (L == LVL_GREEN) toast("Відбій · чисто", C_GREEN);
-      else toast("Рівень знижено: дрони", C_YELLOW);
+      else toast((String("Рівень знижено: ") + levelName(L)).c_str(), levelColor(L));
     }
     s_lastLevel = L;
-    s_lastNear = near;
   }
   if (s_kind == SK_OUTAGE) outageTick();
   if (s_kind == SK_MAIN) updateMain(false);
