@@ -27,6 +27,7 @@ import alerts as al
 import outage
 import tg_source
 import tracker as tk
+import history
 import jaam_ws
 
 PORT = int(os.environ.get("PORT", "8080"))
@@ -50,6 +51,8 @@ for _i, _r in enumerate(al.REGIONS):
     REG_BY_OBLAST.setdefault(_r["oblast"], []).append(_i)
 jaam = jaam_ws.JaamState()
 trk = tk.Tracker()
+HIST = None if os.environ.get("NO_HISTORY") else history.History.load()
+trk.history = HIST
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
@@ -241,6 +244,10 @@ def targets_loop():
         time.sleep(max(15, ALERTS_POLL))
 
 
+def tk_km(a, b):
+    return math.hypot((a["lon"] - b["lon"]) * 111.32 * math.cos(math.radians(a["lat"])), (a["lat"] - b["lat"]) * 111.2)
+
+
 def user_point(q):
     city = q.get("city") or None
     cdef = an.CITIES.get(city) if city else None
@@ -387,15 +394,31 @@ def state(q):
     tg, summ, _ = assess(q)
     final = max(final, summ["level"])
     compact = []
-    for d in tg[:6]:
-        if d["lat"] is None:
+    kept = []
+    for d in tg[:12]:
+        if d["lat"] is None or len(compact) >= 6:
             continue
+        # дублікати (та сама ціль із двох каналів, <8 км) не займають місце — щоб різні групи (Суми й Запоріжжя) були видні
+        if any(k["ch"] == d["ch"] and tk_km(k, d) < 8 for k in kept):
+            continue
+        kept.append(d)
         pts = [p for p in d["path"] if p][1:]
         pts = [pts[i] for i in (0, 2, 4) if i < len(pts)] if len(pts) >= 5 else pts[:3]   # 5, 15, 30 хв
         compact.append({"c": d["ch"], "la": d["lat"], "lo": d["lon"], "hd": d["heading"] if d["heading_conf"] >= 0.3 else -1,
                         "p": round(d["p"][30] * 100), "e": round(d["eta_min"]) if d["eta_min"] is not None else -1,
                         "n": d["count"], "pt": [[p[0], p[1], round(min(p[2], 99))] for p in pts]})
     balli = [d for d in tg if d["lat"] is None]
+    # «ймовірна ціль»: для найнебезпечнішої з дронових цілей (P(ваше місто), якщо воно серед вузлів моделі)
+    lt, lp = "", 0
+    for d in tg:
+        if d.get("likely"):
+            lt, lp = d["likely"]["name"], round(d["likely"]["p"] * 100)
+            break
+    hm = None
+    if HIST is not None and q.get("hm", "1") != "0":
+        ulat, ulon, _ = user_point(q)
+        if ulat is not None:
+            hm = HIST.heat_window(ulat, ulon)
     return {
         "level": an.LEVEL_NAMES[lvl],          # рівень за Telegram (прошивка сама комбінує з офіційним)
         "final": an.LEVEL_NAMES[final],
@@ -428,6 +451,9 @@ def state(q):
         "eta": round(summ["eta_min"]) if summ["eta_min"] is not None else -1,
         "tlevel": an.LEVEL_NAMES[summ["level"]],
         "tgt": compact,
+        "lt": lt,
+        "lp": lp,
+        "hm": hm,
         "ballistic": round(max([d["p"][5] for d in balli], default=0) * 100),
     }
 

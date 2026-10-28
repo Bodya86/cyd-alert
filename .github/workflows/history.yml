@@ -1,0 +1,47 @@
+# Щотижневе оновлення історичної моделі маршрутів (data/history_model.json).
+# 1) докачує архів публічних постів t.me/s/<канал>?before=<id> (кеш сирих даних між запусками — actions/cache),
+# 2) перебудовує модель + бектест на відкладених хвилях, 3) комітить JSON, якщо він змінився.
+# Сирі пости в репозиторій не потрапляють (data/history/raw/ у .gitignore).
+name: history-model
+
+on:
+  schedule:
+    - cron: "40 3 * * 1"     # понеділок 03:40 UTC (05:40/06:40 за Києвом)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: history-model
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore raw archive
+        uses: actions/cache@v4
+        with:
+          path: data/history/raw
+          key: history-raw-${{ github.run_id }}
+          restore-keys: history-raw-
+      - name: Collect posts (incremental)
+        run: python tools/history_collect.py --days 180 --pages 400 --delay 0.8
+      - name: Build model
+        run: |
+          python tools/history_model.py --out data/history_model.json
+          python -m unittest discover -s server -p "test_history.py"
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- data/history_model.json; then echo "без змін"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history_model.json
+          git commit -m "history: weekly route model update"
+          git push

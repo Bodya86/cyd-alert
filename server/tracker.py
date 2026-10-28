@@ -91,7 +91,8 @@ class Gazetteer:
             base = stem if len(stem) <= 4 else stem[:max(4, len(stem) - (2 if len(stem) > 6 else 1))]
             self.idx.setdefault(base[:4], []).append((base, stem, raion, lat, lon, ob, ri))
 
-    def find(self, word, next_word=""):
+    def find(self, word, next_word="", oblast=None):
+        """oblast — контекст («Полтавщина: …»): однойменні села в цій області мають перевагу."""
         w = word.strip("'- ")
         if len(w) < 4 or w in STOP or w[:5] in STOP5:
             return None
@@ -103,7 +104,7 @@ class Gazetteer:
                 continue
             if abs(len(w) - len(stem)) > 4 or (len(base) < 5 and w != stem and not w.startswith(stem)):
                 continue
-            score = len(base) + (3 if raion else 0)
+            score = len(base) + (3 if raion else 0) + (6 if oblast is not None and ob == oblast else 0)
             if not best or score > best[0]:
                 best = (score, dict(name=stem, lat=lat, lon=lon, oblast=ob, region=ri,
                                     sigma=(self.region_geo[ri][2] * 0.7 if raion and ri >= 0 else 50.0 if stem.endswith("щ") else 7.0)))
@@ -218,7 +219,7 @@ def parse_cues(text, gaz, city=None):
 class Track:
     _next = 1
 
-    def __init__(self, typ, lat, lon, sigma, t, rnd, heading=None, kappa=0.0, count=1, src=""):
+    def __init__(self, typ, lat, lon, sigma, t, rnd, heading=None, kappa=0.0, count=1, src="", prior=None):
         self.id = Track._next; Track._next += 1
         self.type = typ
         self.cfg = TYPES[typ]
@@ -232,9 +233,17 @@ class Track:
         self.nobs = 1
         vm, vs = self.cfg["v"]
         self.p = []
-        for _ in range(N):
+        # курс невідомий: 60% частинок — з історичного поля маршрутів (якщо модель є й комірка має дані), решта рівномірно
+        pf = prior.dir_prob(lat, lon) if prior is not None and typ in DRONE_TYPES and not (heading is not None and kappa > 0) else None
+        self.prior_used = pf is not None
+        for k in range(N):
             x, y = rnd.gauss(0, sigma), rnd.gauss(0, sigma)
-            h = rnd.vonmisesvariate(heading, kappa) if heading is not None and kappa > 0 else rnd.uniform(0, TWO_PI)
+            if heading is not None and kappa > 0:
+                h = rnd.vonmisesvariate(heading, kappa)
+            elif pf and k % 5 < 3:
+                h = prior.sample_heading(lat, lon, rnd, pf)
+            else:
+                h = rnd.uniform(0, TWO_PI)
             v = max(vm * 0.4, rnd.gauss(vm, vs))
             self.p.append([x, y, h % TWO_PI, v, 0.0])
         self.w = [1.0 / N] * N
@@ -384,6 +393,7 @@ class Tracker:
         self.seen_posts = set()
         self.events = []       # балістика по регіонах без траєкторії: (t, type, region, oblast, place)
         self.home = None       # місто Telegram-каналу (dict з lat/lon) — апріорна зона для постів без місця
+        self.history = None    # history.History — історичне апріорі (поле курсів, P(ціль)); None — без нього
 
     def _alive(self, now):
         self.tracks = [tr for tr in self.tracks if now - tr.last_obs < tr.cfg["ttl"]]
@@ -495,7 +505,8 @@ class Tracker:
                 o = cues["origin"][0]
                 pr = Proj(p["lat"], p["lon"]); ox, oy = pr.xy(o["lat"], o["lon"])
                 head, kappa = bearing_xy(ox, oy, 0, 0), 2.0
-            tr = Track(typ, p["lat"], p["lon"], sigma, ts, random.Random(self.rnd.random()), head, kappa, cues["count"], src)
+            tr = Track(typ, p["lat"], p["lon"], sigma, ts, random.Random(self.rnd.random()), head, kappa, cues["count"], src,
+                       prior=None if cues["heading"] else self.history)
             self.tracks.append(tr)
             touched.append(("new", tr.id))
         for h in cues["heading"]:
@@ -550,7 +561,12 @@ class Tracker:
             f = tr.forecast(ulat, ulon, R)
             x, y, hd, Rh, v, sd = tr.mean()
             lat, lon = tr.proj.ll(x, y)
-            out.append(dict(id=tr.id, type=tr.type, label=tr.cfg["label"], ch=tr.cfg["ch"], cls=tr.cfg["cls"],
+            lt = None
+            if self.history is not None and tr.type in DRONE_TYPES:
+                name, pt = self.history.likely_target(lat, lon, math.degrees(hd) if Rh >= 0.3 else None, ulat, ulon)
+                if name:
+                    lt = dict(name=name, p=round(pt, 3))
+            out.append(dict(id=tr.id, type=tr.type, label=tr.cfg["label"], ch=tr.cfg["ch"], cls=tr.cfg["cls"], likely=lt,
                             count=tr.count, lat=round(lat, 4), lon=round(lon, 4), heading=round(math.degrees(hd)),
                             heading_conf=round(Rh, 2), speed=round(v), sd_km=round(sd, 1),
                             age_s=int(now - tr.last_obs), obs=tr.nobs, src=sorted(tr.src), **f))
@@ -568,8 +584,9 @@ class Tracker:
             out.append(dict(id=-int(t0) % 100000, type=typ, label=TYPES[typ]["label"], ch=TYPES[typ]["ch"], cls="missile",
                             count=1, lat=place["lat"] if place else None, lon=place["lon"] if place else None,
                             heading=None, heading_conf=0, speed=TYPES[typ]["v"][0], sd_km=None, age_s=int(now - t0),
-                            obs=1, src=["event"], p={5: p, 15: p, 30: p}, eta_min=max(0.0, round(3 - age, 1)), path=[], dist_km=None))
-        out.sort(key=lambda d: -d["p"][30])
+                            obs=1, src=["event"], likely=None, p={5: p, 15: p, 30: p}, eta_min=max(0.0, round(3 - age, 1)), path=[], dist_km=None))
+        # спершу небезпечні, далі ближчі (щоб при p=0 на мапі були різні цілі, а не перші за часом)
+        out.sort(key=lambda d: (-d["p"][30], d["dist_km"] if d["dist_km"] is not None else 9999))
         return out
 
 
