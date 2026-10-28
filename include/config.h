@@ -13,7 +13,7 @@
 #define POLL_ALERTS_MS      20000UL   // alerts.in.ua: ліміт ~8-10 запитів/хв з IP
 #define POLL_TELEGRAM_MS    45000UL   // пряме читання t.me/s/... (сторінка ~150 КБ)
 #define POLL_SERVER_MS      10000UL   // companion-сервер
-#define POLL_STATIC_MS      60000UL   // статичний сервер (GitHub Pages, оновлюється раз на ~5 хв)
+#define POLL_STATIC_MS      75000UL   // хмара (гілка data через api.github.com без токена: ≤48 запитів/год; з токеном 20 с)
 #define POLL_ACTIVE_MS      30000UL   // alerts.in.ua /v1/alerts/active.json (райони + тип загрози)
 #define OUTAGE_POLL_MS     900000UL   // графік відключень: раз на 15 хв
 #define OUTAGE_RETRY_MS    120000UL   // ... і через 2 хв після помилки
