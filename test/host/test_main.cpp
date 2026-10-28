@@ -1,0 +1,85 @@
+// Тест парсера t.me/s і аналізатора на ПК:  ./run_tests.sh [file.html]
+#include "analyzer.h"
+#include "tgparser.h"
+#include <assert.h>
+
+static const CityDef* city(const char* id) { for (int i = 0; i < CITY_COUNT; i++) if (!strcmp(CITIES[i].id, id)) return &CITIES[i]; return nullptr; }
+static int dist(const CityDef* c, const char* id) { for (int i = 0; i < c->ndist; i++) if (!strcmp(c->districts[i].id, id)) return i; return -1; }
+
+#include "cases_gen.h"
+static int fails = 0;
+// near: 1 = має бути «поруч», 0 = ні, -1 = не перевіряти
+static void expect(const char* txt, const char* d, Level want, int near = -1, int far = -1, int ow = -1) {
+  const CityDef* k = city("kremenchuk");
+  PostEval e = analyzePost(txt, k, dist(k, d));
+  bool ok = e.level == want && (near < 0 || (int)e.near == near) && (far < 0 || (int)e.far == far) &&
+            (ow < 0 || (int)e.oblastWide == ow);
+  if (!ok) fails++;
+  printf("%s [%s] score=%d lvl=%s near=%d kind=%s clear=%d ign=%d | %s | %s\n", ok ? "OK  " : "FAIL", d, e.score, levelName(e.level), e.near, e.kind, e.clear, e.ignored, e.reason, txt);
+}
+const char* levelName(Level l) { return l == LVL_RED ? "RED" : l == LVL_YELLOW ? "YELLOW" : "GREEN"; }
+
+#include "outage.h"
+#include <stdlib.h>
+static void check(bool ok, const char* what) {
+  printf("%s %s\n", ok ? "OK  " : "FAIL", what);
+  if (!ok) fails++;
+}
+static void outageTests() {
+  setenv("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4", 1); tzset();
+  uint8_t two[2];
+  outageGpvCells("first", two);  check(two[0] == OUT_OFF && two[1] == OUT_ON, "gpv first");
+  outageGpvCells("msecond", two); check(two[0] == OUT_ON && two[1] == OUT_MAYBE, "gpv msecond");
+  outageGpvCells("no", two);     check(two[0] == OUT_OFF && two[1] == OUT_OFF, "gpv no");
+  check(outageYmdFromDayTs(1793138400L) == 20261028, "kyiv midnight key 2026-10-28");   // 27.10 22:00 UTC
+  OutageInfo o; o.ndays = 2;
+  o.days[0].ymd = 20261028; o.days[1].ymd = 20261029;
+  for (int i = 0; i < 48; i++) { o.days[0].c[i] = (i >= 28 && i < 36) ? OUT_OFF : OUT_ON; o.days[1].c[i] = i < 4 ? OUT_MAYBE : OUT_ON; }
+  time_t t = 1793138400L + 13 * 3600 + 10 * 60;   // 28.10 13:10 за Києвом
+  time_t at; uint8_t nv;
+  check(outageNow(o, t, &at, &nv) == OUT_ON && at == 1793138400L + 14 * 3600 && nv == OUT_OFF, "now on, off at 14:00");
+  t = 1793138400L + 15 * 3600;
+  check(outageNow(o, t, &at, &nv) == OUT_OFF && at == 1793138400L + 18 * 3600 && nv == OUT_ON, "now off until 18:00");
+  t = 1793138400L + 20 * 3600;
+  check(outageNow(o, t, &at, &nv) == OUT_ON && at == 1793138400L + 24 * 3600 && nv == OUT_MAYBE, "change on tomorrow 00:00");
+  check(outageOffHalfHours(o.days[0]) == 8, "4 h off today");
+  OutageInfo m; outageFromMask(m, (1ULL << 0) | (1ULL << 47), t);
+  check(m.manual && m.ndays == 2 && m.days[0].c[0] == OUT_OFF && m.days[0].c[1] == OUT_ON && m.days[1].c[47] == OUT_OFF, "manual mask");
+}
+
+int main(int argc, char** argv) {
+  outageTests();
+  // ЖОВТИЙ = дрони, ЧЕРВОНИЙ = ракети/КАБ/авіація, ЗЕЛЕНИЙ = чисто
+  for (const Case& c : CASES) expect(c.t, c.d, c.l, c.near, c.far, c.ow);   // test/analyzer_cases.json
+  {  // балістика «хз звідки» — червоний 10 хв; «харьков ракета» — лише інформація
+    static TgPost fp[2];
+    time_t now = 1800000000;
+    fp[0].id = 1; fp[0].ts = now - 5 * 60; strlcpy(fp[0].text, "Бублистика хз откуда", sizeof(fp[0].text));
+    fp[1].id = 2; fp[1].ts = now - 4 * 60; strlcpy(fp[1].text, "харьков ракета", sizeof(fp[1].text));
+    const CityDef* k = city("kremenchuk");
+    check(analyzeFeed(fp, 2, k, dist(k, "molod"), now, nullptr, nullptr) == LVL_RED, "feed: ballistic oblast-wide red");
+    fp[0].ts = now - 12 * 60;
+    PostEval be;
+    check(analyzeFeed(fp, 2, k, dist(k, "molod"), now, nullptr, &be) == LVL_GREEN && be.far, "feed: oblast-wide expires 10 min, far stays info");
+  }
+
+  if (argc > 1) {
+    FILE* f = fopen(argv[1], "rb");
+    if (!f) { perror(argv[1]); return 1; }
+    static TgPost posts[10];
+    tgp::Parser p; p.out = posts; p.maxPosts = 10;
+    int c; while ((c = fgetc(f)) != EOF) p.feed((char)c);
+    p.commit(); fclose(f);
+    printf("\n--- parsed %d posts ---\n", p.count);
+    const CityDef* k = city("kremenchuk");
+    for (int i = 0; i < p.count; i++) {
+      PostEval e = analyzePost(posts[i].text, k, dist(k, "molod"));
+      printf("#%u %ld %-6s s=%d ign=%d clr=%d | %.110s\n", posts[i].id, (long)posts[i].ts, levelName(e.level), e.score, e.ignored, e.clear, posts[i].text);
+    }
+    int best; PostEval be;
+    Level L = analyzeFeed(posts, p.count, k, dist(k, "molod"), posts[p.count - 1].ts + 60, &best, &be);
+    printf("FEED => %s (best #%d, %s)\n", levelName(L), best, be.reason);
+  }
+  printf(fails ? "\n%d FAILED\n" : "\nALL OK\n", fails);
+  return fails ? 1 : 0;
+}

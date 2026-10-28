@@ -1,0 +1,32 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">
+<title>CYD Alert</title><style>
+body{background:#0d1117;color:#e6edf3;font:15px system-ui;margin:0;padding:20px;max-width:760px;margin:auto}
+.card{background:#161b22;border-radius:14px;padding:16px;margin:12px 0;border-left:6px solid #3fb950}
+.yellow{border-color:#f2c94c}.red{border-color:#ff4d4f}.mut{color:#8b949e;font-size:13px}
+h1{font-size:22px}select,input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:6px}
+</style><h1>🛡 CYD Alert <span class=mut id=gen></span></h1>
+<div>Місто <select id=c></select> Район <select id=d></select></div><div id=st></div><div id=tg></div><div id=out></div><div id=ps></div>
+<script>
+const L=%LOC%;const c=document.getElementById('c'),d=document.getElementById('d');
+L.cities.forEach(x=>c.add(new Option(x.name,x.id)));c.value='kremenchuk';
+function fd(){d.innerHTML='';d.add(new Option('—',''));(L.cities.find(x=>x.id==c.value).districts||[]).forEach(x=>d.add(new Option(x.name,x.id)))}
+c.onchange=()=>{fd();go()};d.onchange=go;fd();
+const J=async u=>{const r=await fetch(u+'?t='+Date.now());if(!r.ok)throw new Error(r.status);return r.json()};
+const t=s=>s?new Date(s*1000).toLocaleTimeString('uk'):'—';
+async function go(){const q=`city=${c.value}&district=${d.value}`;
+ const s=await J(`api/state/${c.value}${d.value?'/'+d.value:''}.json`);
+ document.getElementById('gen').textContent='оновлено '+t(s.generated)+' (GitHub Actions, ~5 хв)';
+ document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Дрони',red:'🔴 Ракети'}[s.final]}</b> (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel} · тривоги: ${s.oblasts_src||'—'}</span></div>`;
+ const g=await J(`api/targets/${c.value}.json`);const S=g.summary;
+ document.getElementById('tg').innerHTML=`<div class=card style="border-color:#58a6ff"><b>🎯 Цілі (${g.targets.length})</b> · P(≤${g.user?g.user.R:15} км, 30 хв): дрони ${Math.round(S.p_drone[30]*100)}%, ракети ${Math.round(S.p_missile[30]*100)}%${S.eta_min!=null?' · ETA '+Math.round(S.eta_min)+' хв':''}<br>`+
+  g.targets.map(x=>`<span class=mut>${x.label}${x.count>1?' ×'+x.count:''} · ${x.dist_km!=null?x.dist_km+' км':'—'} · курс ${x.heading!=null?x.heading+'°':'—'} (${Math.round(x.heading_conf*100)}%) · ${x.speed} км/год · P5/15/30 ${[5,15,30].map(T=>Math.round(x.p[T]*100)).join('/')}% · ETA ${x.eta_min??'—'} · ${x.src.join(',')}</span>`).join('<br>')+`<div class=mut>${g.attribution}</div></div>`;
+ const p=s.channel?await J(`api/posts/${s.channel}.json`):{posts:[]};
+ document.getElementById('ps').innerHTML=p.posts.slice().reverse().map(x=>`<div class="card ${x.level}"><span class=mut>#${x.id} · ${t(x.ts)} · бал ${x.score} ${x.ignored?'· реклама':''}${x.clear?'· відбій':''} ${x.reason}</span><br>${x.text}</div>`).join('')}
+const OC=['#2ea043','#5b6573','#f59e0b'];
+async function outg(){const ci=L.cities.find(x=>x.id==c.value);const o=await J(`api/outage/${ci.oblast}/${document.getElementById('g').value}.json`).catch(()=>({days:[],err:'немає джерела для області'}));
+ document.getElementById('ob').innerHTML=(o.days||[]).map(dd=>`<div class=mut>${dd.date}</div><div style="display:flex;gap:1px">${[...dd.cells].map(v=>`<span style="flex:1;height:14px;background:${OC[v]}"></span>`).join('')}</div>`).join('')||('— '+(o.err||''));
+ document.getElementById('os').textContent=(o.src||'')+' '+(o.updated||'')}
+document.getElementById('out').innerHTML=`<div class=card style="border-color:#5b6573"><b>⚡ Відключення</b> черга <select id=g>${%GROUPS%.map(x=>`<option>${x}</option>`).join('')}</select> <span id=os class=mut></span><div id=ob></div></div>`;
+document.getElementById('g').onchange=outg;
+go();outg();setInterval(go,60000);
+</script>

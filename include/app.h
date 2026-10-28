@@ -1,0 +1,124 @@
+#pragma once
+#include <Arduino.h>
+#include <time.h>
+#include "config.h"
+#include "gen_data.h"
+#include "map_meta.h"
+#include "outage.h"
+
+// ------------------------------- Рівні небезпеки -------------------------------
+// ЗЕЛЕНИЙ — чисто; ЖОВТИЙ — дрони (шахеди/БпЛА) або тривога невідомого типу;
+// ЧЕРВОНИЙ — ракети / балістика / КАБ / авіація (і інші небезпеки: обстріли тощо)
+enum Level : uint8_t { LVL_GREEN = 0, LVL_YELLOW = 1, LVL_RED = 2 };
+const char* levelName(Level l);   // "ЧИСТО" / "ДРОНИ" / "РАКЕТИ"
+
+// ------------------------------- Налаштування (NVS) -------------------------------
+struct Settings {
+  String ssid, pass;
+  String token;        // alerts.in.ua
+  String server;       // companion server base url
+  String channel;      // telegram channel (без @), порожньо = за містом
+  int8_t oblast = -1;  // індекс у OBLASTS
+  int16_t city = -1;   // індекс у CITIES, -1 = вся область
+  int16_t district = -1; // індекс у CITIES[city].districts, -1 = все місто
+  uint8_t brightness = 200;
+  bool sound = true;
+  bool alertOnYellow = true;   // показувати повноекранне сповіщення на жовтому рівні
+  // графік відключень світла
+  uint8_t outMode = OUT_MODE_AUTO;   // OUT_MODE_OFF / AUTO / MANUAL
+  int8_t outGroup = -1;              // індекс у OUTAGE_GROUPS ("1.1".."6.2"), -1 — не обрано
+  int8_t outProv = -1;               // індекс у OUTAGE_PROVS, -1 — авто за областю
+  uint64_t outMask = 0;              // ручний графік: біт i = немає світла в півгодину i (0..47)
+  bool configured() const { return oblast >= 0; }
+};
+extern Settings g_set;
+void settingsLoad();
+void settingsSave();
+void settingsReset();
+const CityDef* userCity();
+const DistrictDef* userDistrict();
+String userChannel();
+String userPlaceName();   // "Кременчук · Молодіжний"
+
+// ------------------------------- Пости Telegram -------------------------------
+#define TG_TEXT_MAX 360
+struct TgPost {
+  uint32_t id = 0;
+  time_t ts = 0;
+  char text[TG_TEXT_MAX] = {0};
+};
+
+// ------------------------------- Цілі з сервера (трекер) -------------------------------
+#define MAX_TARGETS 6
+struct MapTarget {
+  char ch = 0;              // 'S' шахед, 'J' реактивний, 'D' розвідник, 'U' невідомо, 'C' крилата, 'K' КАБ
+  float lat = 0, lon = 0;
+  int16_t hd = -1;          // курс, градуси (−1 — невідомий)
+  uint8_t p = 0;            // P(пролетить ≤ R км за 30 хв), %
+  int8_t eta = -1;          // хв, −1 — немає
+  uint8_t n = 1;            // кількість у групі
+  uint8_t npt = 0;          // точки прогнозу (5/15/30 хв)
+  float pla[3] = {0}, plo[3] = {0};
+  uint8_t psd[3] = {0};     // поперечне σ, км (конус невизначеності)
+};
+
+// ------------------------------- Загальний стан -------------------------------
+struct AppState {
+  char oblasts[OBLAST_COUNT + 1];   // 'N','P','A','Y','R' ('?' — немає даних)
+  // райони (порядок MAP_REGIONS): '.' немає, 'Y'/'y' дрони/невідомо (мала — частково, громади),
+  // 'R'/'r' ракети/КАБ/авіація, '?' — немає даних
+  char regions[MAP_REGION_COUNT + 1];
+  bool regionsFine = false;         // true — дані з точністю до району (alerts.in.ua з токеном / сервер)
+  bool alertsOk = false;
+  uint32_t alertsAt = 0;            // millis() останнього успіху
+  const char* alertsSrc = "—";
+
+  Level tgLevel = LVL_GREEN;
+  int tgScore = 0;
+  char tgText[TG_TEXT_MAX] = {0};   // найрелевантніший свіжий пост
+  time_t tgTime = 0;
+  char tgReason[120] = {0};
+  char tgKind[24] = {0};            // "Дрони", "Ракети", "КАБ"...
+  bool tgNear = false;              // бал >= 7 — ціль поруч / курс на вас
+  bool tgOk = false;
+  uint32_t tgAt = 0;
+  const char* tgSrc = "—";
+
+  Level offLevel = LVL_GREEN;       // офіційна тривога у вашому районі: жовтий (дрони/невідомо) / червоний (ракети)
+  bool offPartial = false;          // тривога лише в частині району (громади)
+
+  // трекер цілей (лише з сервером-компаньйоном)
+  bool trkOk = false;
+  Level trkLevel = LVL_GREEN;       // рівень за ймовірністю прольоту цілей поруч
+  uint8_t pNear = 0, pDrone = 0, pMissile = 0, pBallistic = 0;   // %, горизонт 30 хв (балістика — 5 хв)
+  int8_t eta = -1;                  // хв до найближчого ймовірного прольоту
+  uint8_t ntgt = 0;
+  MapTarget tgt[MAX_TARGETS];
+
+  Level level = LVL_GREEN;          // підсумковий рівень для адреси користувача
+  OutageInfo outage;                // графік відключень (обраної черги)
+  uint32_t version = 0;             // збільшується при кожній зміні
+};
+extern AppState g_state;
+void stateLock();
+void stateUnlock();
+Level computeFinalLevel(AppState& s);   // викликати під lock (оновлює offLevel/offPartial)
+char userOblastStatus();
+int userRegion();                             // індекс у MAP_REGIONS або -1
+void regionsFromOblasts(AppState& s);         // заповнити regions з oblasts (без точності до району)
+
+// ------------------------------- Модулі -------------------------------
+void hwInit();
+void hwSetBrightness(uint8_t v);
+void notifyInit();
+void notifyLoop();
+void notifyLevel(Level l, bool near = false);   // запуск звуку/LED для рівня (near — ціль поруч)
+void notifySilence();        // вимкнути звук (LED лишається)
+void notifyTest(Level l);
+
+void netStart();             // запуск фонової задачі (core 0)
+void netForceRefresh();
+void netOutageRefresh();     // перечитати графік відключень (змінилась черга/режим)
+
+void uiInit();
+void uiLoop();

@@ -1,0 +1,12 @@
+.pio/
+.vscode/.browse*
+__pycache__/
+*.pyc
+public/
+.state/
+test/host/cases_gen.h
+*.bin
+*.zip
+*.session
+*.session-journal
+.env

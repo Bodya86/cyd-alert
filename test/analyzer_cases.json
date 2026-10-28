@@ -1,0 +1,374 @@
+[
+ {
+  "t": "Шахед курсом на Кременчук з боку Глобиного",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": true
+ },
+ {
+  "t": "Шахед в районе Глобино",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false
+ },
+ {
+  "t": "Шахеды на Полтаву",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false
+ },
+ {
+  "t": "Будуть на днях бити по нам, Полтавская обл",
+  "d": "molod",
+  "lvl": "green",
+  "near": null
+ },
+ {
+  "t": "Шахед над Молодіжним, вибухи! В укриття",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": true
+ },
+ {
+  "t": "2 шахеда заходят на город со стороны Кобеляк, на Раковку",
+  "d": "rakivka",
+  "lvl": "yellow",
+  "near": true
+ },
+ {
+  "t": "Ракета на Кременчук!",
+  "d": "center",
+  "lvl": "red",
+  "near": true
+ },
+ {
+  "t": "Балістика! Швидкісна ціль на Кременчук",
+  "d": "molod",
+  "lvl": "red",
+  "near": true
+ },
+ {
+  "t": "КАБи в районі Глобиного",
+  "d": "molod",
+  "lvl": "red",
+  "near": null
+ },
+ {
+  "t": "Крилаті ракети над Кіровоградщиною",
+  "d": "molod",
+  "lvl": "red",
+  "near": false
+ },
+ {
+  "t": "Мопед в районе Крюкова, летит на НПЗ",
+  "d": "kryukiv",
+  "lvl": "yellow",
+  "near": true
+ },
+ {
+  "t": "Мопед в районе Крюкова",
+  "d": "revivka",
+  "lvl": "yellow",
+  "near": false
+ },
+ {
+  "t": "Манжелия/Ламаное/Глобино и на вылет с области",
+  "d": "molod",
+  "lvl": "green",
+  "near": null
+ },
+ {
+  "t": "Ну буде відбій 🤝",
+  "d": "center",
+  "lvl": "green",
+  "near": null
+ },
+ {
+  "t": "Стандарт 🚬🚬🚬",
+  "d": "center",
+  "lvl": "green",
+  "near": null
+ },
+ {
+  "t": "🔥 СУПЕРЗНИЖКА НА БРОВИ! Запис за телефоном, ціна 300 грн",
+  "d": "center",
+  "lvl": "green",
+  "near": null
+ },
+ {
+  "t": "БпЛА в районі Світловодська, курс на ГЕС",
+  "d": "zanasyp",
+  "lvl": "yellow",
+  "near": true
+ },
+ {
+  "t": "БпЛА в районі Світловодська",
+  "d": "kryukiv",
+  "lvl": "yellow",
+  "near": false
+ },
+ {
+  "t": "Бублистика хз откуда",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "харьков ракета",
+  "d": "molod",
+  "lvl": "green",
+  "near": false,
+  "far": true,
+  "ow": false
+ },
+ {
+  "t": "баллистика",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "балістика!!!",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "Балик",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "Болистика",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "искандер хз откуда",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "кинжал",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": true
+ },
+ {
+  "t": "баліста на нас",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "бублистика на кременчуг",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "харків ракета курсом на кременчук",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "ракета с Харькова на нас",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "рокета на кременчуг",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "крылатая над Полтавой",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "калибры с черного моря",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "х-101 на кременчуг",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "Днепр ракета",
+  "d": "molod",
+  "lvl": "red",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "ракета на Киев",
+  "d": "molod",
+  "lvl": "green",
+  "near": false,
+  "far": true,
+  "ow": false
+ },
+ {
+  "t": "Шахиды над Глобино",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "шахеды на светловодск",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "мопеды над Кременчугом",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "герань в районе Горишних Плавней",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "гудит над городом",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "дроны на светловодск",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "БПЛА в районе Хорола",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "Кривой Рог шахеды",
+  "d": "molod",
+  "lvl": "yellow",
+  "near": false,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "Одесса шахеды",
+  "d": "molod",
+  "lvl": "green",
+  "near": false,
+  "far": true,
+  "ow": false
+ },
+ {
+  "t": "кабы по Кременчугу",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "авиабомба на Кременчук",
+  "d": "molod",
+  "lvl": "red",
+  "near": true,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "Запорожье КАБы",
+  "d": "molod",
+  "lvl": "green",
+  "near": false,
+  "far": true,
+  "ow": false
+ },
+ {
+  "t": "Сумы КАБы",
+  "d": "molod",
+  "lvl": "green",
+  "near": false,
+  "far": true,
+  "ow": false
+ },
+ {
+  "t": "кабінет міністрів засідає",
+  "d": "molod",
+  "lvl": "green",
+  "near": null,
+  "far": false,
+  "ow": false
+ },
+ {
+  "t": "🚀🚀🚀",
+  "d": "molod",
+  "lvl": "green",
+  "near": null,
+  "far": false,
+  "ow": false
+ }
+]
