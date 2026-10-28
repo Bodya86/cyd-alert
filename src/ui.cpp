@@ -3,6 +3,7 @@
 #include "analyzer.h"
 #include "textutil.h"
 #include "map_meta.h"
+#include "map_views_meta.h"
 #include <WiFi.h>
 #include <lvgl.h>
 #include <vector>
@@ -526,9 +527,100 @@ static void rebuildPalette() {
   s_pal[MAP_RBORDER] = col(C_MAP_RBD);
   s_pal[MAP_BORDER] = col(C_MAP_BRD);
   s_pal[MAP_BG] = col(LEVEL_BG[s_uiLevel]);
+  s_pal[MAP_WATER] = col(0x1F4A73);   // водосховища (зум)
+  s_pal[MAP_RIVER] = col(0x2C6AA8);   // річки (зум)
+}
+
+// ---- зум мапи: 0 — уся Україна, 1 — ваша область, 2 — околиці міста (±75 км) ----
+// Растри кожного виду згенеровано заздалегідь (tools/gen_map_views.py) — на пристрої лише RLE-відмальовка.
+extern const MapView MAP_VIEW_UA;
+static const MapView* s_view = &MAP_VIEW_UA;
+static uint8_t s_zoom = 0;
+static uint32_t s_manualZoomAt = 0;      // ручний зум — автозум мовчить 3 хв
+static uint32_t s_autoHoldAt = 0;        // коли востаннє була причина тримати наближення
+static lv_obj_t* s_zoomBox = nullptr;
+static lv_obj_t* s_zoomTag = nullptr;
+static RouteHeat s_heat;
+static char s_ltName[28] = {0};
+static uint8_t s_ltP = 0;
+
+static const MapView* viewFor(int z) {
+  if (z == 1 && g_set.oblast >= 0 && g_set.oblast < 27 && MAP_OBL_VIEW[g_set.oblast] >= 0) return &MAP_VIEWS[MAP_OBL_VIEW[g_set.oblast]];
+  if (z == 2) {
+    const CityDef* c = userCity();
+    if (c) for (int i = 0; i < MAP_CITY_VIEW_COUNT; i++)
+      if (!strcmp(MAP_CITY_VIEWS[i].city, c->id)) return &MAP_VIEWS[MAP_CITY_VIEWS[i].view];
+  }
+  return z == 0 ? &MAP_VIEW_UA : nullptr;
+}
+
+static inline float vx(const MapView* v, float lon) { return (lon * MAP_PROJ_COSLAT - v->minx) * v->scale + v->offx; }
+static inline float vy(const MapView* v, float lat) { return (-lat - v->miny) * v->scale + v->offy; }
+static inline lv_point_t mapPt(const lv_area_t& c, float lat, float lon) {
+  lv_point_t p;
+  p.x = (lv_coord_t)(c.x1 + vx(s_view, lon));
+  p.y = (lv_coord_t)(c.y1 + vy(s_view, lat));
+  return p;
+}
+static float kmBetween(float la1, float lo1, float la2, float lo2) {
+  float dx = (lo2 - lo1) * 111.32f * cosf((la1 + la2) * 0.5f * 0.0174533f), dy = (la2 - la1) * 110.57f;
+  return sqrtf(dx * dx + dy * dy);
+}
+// точка користувача: місто, на зумі 2 — зміщена на ~3 км у бік вашої частини міста
+static bool userPoint(float& lat, float& lon) {
+  const CityDef* c = userCity();
+  if (!c) return false;
+  lat = c->lat; lon = c->lon;
+  const DistrictDef* d = userDistrict();
+  if (d && d->sector >= 0 && s_zoom == 2) {
+    float b = d->sector * 0.0174533f;
+    lat += 3.0f / 111.0f * cosf(b);
+    lon += 3.0f / (111.0f * cosf(lat * 0.0174533f)) * sinf(b);
+  }
+  return true;
 }
 
 static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c);
+
+static void drawHeat(lv_draw_ctx_t* dc, const lv_area_t& c, const lv_area_t* clip) {
+  const RouteHeat& h = s_heat;
+  if (!g_set.showRoutes || s_zoom < 1 || !h.w || !h.h) return;
+  lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
+  d.radius = 0; d.border_width = 0; d.bg_color = col(0xFF7A1A);
+  for (int r = 0; r < h.h; r++)
+    for (int q = 0; q < h.w; q++) {
+      uint8_t v = h.v[r * h.w + q];
+      if (v < 3) continue;
+      float la = h.la0 - r * HEAT_STEP, lo = h.lo0 + q * HEAT_STEP;
+      lv_point_t a = mapPt(c, la + HEAT_STEP / 2, lo - HEAT_STEP / 2), b = mapPt(c, la - HEAT_STEP / 2, lo + HEAT_STEP / 2);
+      lv_area_t ar = {a.x, a.y, (lv_coord_t)(b.x - 1), (lv_coord_t)(b.y - 1)}, rr;
+      if (!_lv_area_intersect(&rr, &ar, clip)) continue;
+      d.bg_opa = (lv_opa_t)(20 + v * 4);   // ≤ ~60% — не перекриває тривоги
+      lv_draw_rect(dc, &d, &rr);
+    }
+}
+
+static void drawLabels(lv_draw_ctx_t* dc, const lv_area_t& c) {
+  const MapView* v = s_view;
+  if (!v->labels) return;
+  lv_draw_label_dsc_t ld; lv_draw_label_dsc_init(&ld);
+  ld.font = &font_ua_12;
+  lv_draw_rect_dsc_t dd; lv_draw_rect_dsc_init(&dd);
+  dd.bg_opa = LV_OPA_COVER; dd.radius = 0; dd.border_width = 0;
+  static const uint32_t KC[3] = {0xE6EDF3, 0xC9D1D9, 0x8B98A5};
+  for (int i = 0; i < v->nlabels; i++) {
+    const MapLabel& L = v->labels[i];
+    lv_area_t dot = {(lv_coord_t)(c.x1 + L.x - 1), (lv_coord_t)(c.y1 + L.y - 1), (lv_coord_t)(c.x1 + L.x + (L.kind < 2 ? 1 : 0)), (lv_coord_t)(c.y1 + L.y + (L.kind < 2 ? 1 : 0))};
+    dd.bg_color = col(KC[L.kind > 2 ? 2 : L.kind]);
+    lv_draw_rect(dc, &dd, &dot);
+    lv_area_t a = {(lv_coord_t)(c.x1 + L.lx), (lv_coord_t)(c.y1 + L.ly - 1), (lv_coord_t)(c.x1 + L.lx + 110), (lv_coord_t)(c.y1 + L.ly + 14)};
+    lv_area_t sh = a; sh.x1++; sh.x2++; sh.y1++; sh.y2++;
+    ld.color = lv_color_black(); ld.opa = LV_OPA_70;
+    lv_draw_label(dc, &ld, &sh, L.name, nullptr);
+    ld.color = col(KC[L.kind > 2 ? 2 : L.kind]); ld.opa = LV_OPA_COVER;
+    lv_draw_label(dc, &ld, &a, L.name, nullptr);
+  }
+}
 
 // мапа: RLE-рядки → прямокутники; сусідні відрізки з однаковим кольором зливаються
 static void mapDrawCb(lv_event_t* e) {
@@ -536,6 +628,8 @@ static void mapDrawCb(lv_event_t* e) {
   lv_draw_ctx_t* dc = lv_event_get_draw_ctx(e);
   lv_area_t c; lv_obj_get_coords(obj, &c);
   const lv_area_t* clip = dc->clip_area;
+  const uint16_t* ROWS = s_view->rowOfs;
+  const uint8_t* RUNS = s_view->runs;
   lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
   d.bg_opa = LV_OPA_COVER; d.radius = 0; d.border_width = 0;
   int y0 = LV_MAX(clip->y1, c.y1), y1 = LV_MIN(LV_MIN(clip->y2, c.y2), c.y1 + MAP_H - 1);
@@ -549,8 +643,8 @@ static void mapDrawCb(lv_event_t* e) {
       if (_lv_area_intersect(&r, &a, clip)) { d.bg_color = runC; lv_draw_rect(dc, &d, &r); }
       runN = 0;
     };
-    for (int i = MAP_ROW_OFS[row]; i < MAP_ROW_OFS[row + 1]; i++) {
-      uint8_t n = MAP_RUNS[i * 2], v = MAP_RUNS[i * 2 + 1];
+    for (int i = ROWS[row]; i < ROWS[row + 1]; i++) {
+      uint8_t n = RUNS[i * 2], v = RUNS[i * 2 + 1];
       if (v == MAP_BG) { flush(); }
       else {
         lv_color_t cc = s_pal[v];
@@ -562,19 +656,16 @@ static void mapDrawCb(lv_event_t* e) {
     }
     flush();
   }
+  drawHeat(dc, c, clip);
+  if (s_zoom) drawLabels(dc, c);
   drawTargets(dc, c);
 }
 
-// ---- цілі трекера поверх мапи: конус невизначеності, прогнозний шлях зі стрілкою, значок за типом ----
+// ---- цілі трекера поверх мапи ----
+// значок за типом (масштаб від зуму), підпис «Шахед x2 · 38 км», пунктир теоретичного курсу з мітками
+// +5/+15/+30 хв, блідий конус невизначеності. Кожна ціль малюється окремо — навіть дві далекі на всю Україну.
 static MapTarget s_tgt[MAX_TARGETS];
 static uint8_t s_ntgt = 0;
-
-static inline lv_point_t mapPt(const lv_area_t& c, float lat, float lon) {
-  lv_point_t p;
-  p.x = (lv_coord_t)(c.x1 + (lon * MAP_PROJ_COSLAT - MAP_PROJ_MINX) * MAP_PROJ_SCALE + MAP_PROJ_OFFX);
-  p.y = (lv_coord_t)(c.y1 + (-lat - MAP_PROJ_MINY) * MAP_PROJ_SCALE + MAP_PROJ_OFFY);
-  return p;
-}
 
 static uint32_t targetColor(char ch) {
   switch (ch) {
@@ -585,53 +676,102 @@ static uint32_t targetColor(char ch) {
     default:  return 0xFFD54A;   // шахед / невідомо
   }
 }
+static const char* targetName(char ch) {
+  switch (ch) {
+    case 'S': return "Шахед";
+    case 'J': return "Реакт.";
+    case 'D': return "Розвід.";
+    case 'C': return "Ракета";
+    case 'K': return "КАБ";
+    default:  return "Ціль";
+  }
+}
+
+// пунктир: phase переноситься між відрізками, щоб штрихи йшли рівно по ламаній
+static void dashLine(lv_draw_ctx_t* dc, const lv_draw_line_dsc_t* ln, lv_point_t a, lv_point_t b, float& phase) {
+  const float ON = 4, PER = 7;
+  float dx = b.x - a.x, dy = b.y - a.y, L = sqrtf(dx * dx + dy * dy);
+  if (L < 0.5f) return;
+  dx /= L; dy /= L;
+  float s = 0;
+  while (s < L) {
+    float ph = fmodf(phase + s, PER);
+    float seg = ph < ON ? LV_MIN(ON - ph, L - s) : LV_MIN(PER - ph, L - s);
+    if (ph < ON && seg >= 0.8f) {
+      lv_point_t p = {(lv_coord_t)(a.x + dx * s + 0.5f), (lv_coord_t)(a.y + dy * s + 0.5f)};
+      lv_point_t q = {(lv_coord_t)(a.x + dx * (s + seg) + 0.5f), (lv_coord_t)(a.y + dy * (s + seg) + 0.5f)};
+      lv_draw_line(dc, ln, &p, &q);
+    }
+    s += seg > 0.01f ? seg : 0.5f;
+  }
+  phase = fmodf(phase + L, PER);
+}
 
 static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
   if (!s_ntgt) return;
-  const float KM_PX = MAP_PROJ_SCALE / 111.0f;      // пікселів на км (широта)
+  const float KM_PX = s_view->scale / 111.0f;      // пікселів на км (широта)
+  static const float ICON[3] = {5.5f, 7.0f, 8.5f};
+  float S = ICON[s_zoom > 2 ? 2 : s_zoom];
+  float ula = 0, ulo = 0; bool haveU = userPoint(ula, ulo);
   lv_draw_rect_dsc_t cone; lv_draw_rect_dsc_init(&cone);
-  cone.radius = LV_RADIUS_CIRCLE; cone.border_width = 0; cone.bg_opa = LV_OPA_20;
+  cone.radius = LV_RADIUS_CIRCLE; cone.border_width = 0; cone.bg_opa = LV_OPA_10;
   lv_draw_line_dsc_t ln; lv_draw_line_dsc_init(&ln);
-  ln.width = 1; ln.opa = LV_OPA_80; ln.round_start = 0; ln.round_end = 0;
-  for (int k = s_ntgt - 1; k >= 0; k--) {           // найімовірніша ціль — зверху
+  ln.width = s_zoom ? 2 : 1; ln.opa = LV_OPA_90; ln.round_start = 0; ln.round_end = 0;
+  lv_draw_line_dsc_t tk = ln; tk.width = 1;
+  lv_draw_label_dsc_t ld; lv_draw_label_dsc_init(&ld);
+  ld.font = &font_ua_12;
+  lv_point_t pos[MAX_TARGETS]; bool vis[MAX_TARGETS] = {false};
+  // 1) конуси й пунктир — під значками
+  for (int k = s_ntgt - 1; k >= 0; k--) {
     const MapTarget& t = s_tgt[k];
     lv_color_t tc = col(targetColor(t.ch));
     lv_point_t p0 = mapPt(c, t.lat, t.lon);
-    if (p0.x < c.x1 - 20 || p0.x > c.x2 + 20 || p0.y < c.y1 - 20 || p0.y > c.y2 + 20) continue;
-    // конус: напівпрозорі кола радіусом σ уздовж прогнозу
+    pos[k] = p0;
+    bool in = !(p0.x < c.x1 - 4 || p0.x > c.x2 + 4 || p0.y < c.y1 - 4 || p0.y > c.y2 + 4);
+    vis[k] = in;
     cone.bg_color = tc;
     for (int i = 0; i < t.npt; i++) {
       lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
-      int r = LV_CLAMP(2, (int)(t.psd[i] * KM_PX + 0.5f), 16);
+      int r = LV_CLAMP(2, (int)(t.psd[i] * KM_PX + 0.5f), s_zoom ? 40 : 16);
       lv_area_t a = {(lv_coord_t)(q.x - r), (lv_coord_t)(q.y - r), (lv_coord_t)(q.x + r), (lv_coord_t)(q.y + r)};
       lv_draw_rect(dc, &cone, &a);
     }
-    // шлях і стрілка на кінці
-    ln.color = tc;
-    lv_point_t prev = p0, last = p0, before = p0;
+    ln.color = tc; tk.color = tc;
+    lv_point_t prev = p0, before = p0;
+    float phase = 0;
     for (int i = 0; i < t.npt; i++) {
       lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
       if (q.x == prev.x && q.y == prev.y) continue;
-      lv_draw_line(dc, &ln, &prev, &q);
-      before = prev; prev = last = q;
-    }
-    if (last.x != p0.x || last.y != p0.y) {
-      float dx = last.x - before.x, dy = last.y - before.y, L = sqrtf(dx * dx + dy * dy);
+      dashLine(dc, &ln, prev, q, phase);
+      // мітка часу: короткий поперечний штрих + «5/15/30» (на Україні — лише штрих)
+      float dx = q.x - prev.x, dy = q.y - prev.y, L = sqrtf(dx * dx + dy * dy);
       if (L > 0.5f) {
         dx /= L; dy /= L;
-        lv_point_t a1 = {(lv_coord_t)(last.x - 4 * dx + 3 * dy), (lv_coord_t)(last.y - 4 * dy - 3 * dx)};
-        lv_point_t a2 = {(lv_coord_t)(last.x - 4 * dx - 3 * dy), (lv_coord_t)(last.y - 4 * dy + 3 * dx)};
-        lv_draw_line(dc, &ln, &last, &a1);
-        lv_draw_line(dc, &ln, &last, &a2);
+        lv_point_t a1 = {(lv_coord_t)(q.x + 3 * dy), (lv_coord_t)(q.y - 3 * dx)}, a2 = {(lv_coord_t)(q.x - 3 * dy), (lv_coord_t)(q.y + 3 * dx)};
+        lv_draw_line(dc, &tk, &a1, &a2);
+        if (s_zoom && t.npt == 3) {
+          static const char* TL[3] = {"5", "15", "30"};
+          lv_area_t la = {(lv_coord_t)(q.x + 4 * dy + 2), (lv_coord_t)(q.y - 4 * dx - 7), (lv_coord_t)(q.x + 4 * dy + 22), (lv_coord_t)(q.y - 4 * dx + 7)};
+          ld.color = tc; ld.opa = LV_OPA_80;
+          lv_draw_label(dc, &ld, &la, TL[i], nullptr);
+        }
       }
+      before = prev; prev = q;
     }
-    // значок: дрони — трикутник за курсом, ракети/КАБ — ромб; чорна обвідка для контрасту
+    (void)before;
+  }
+  // 2) значки: дрони — трикутник за курсом (стрілка курсу), ракети/КАБ — ромб; чорна обвідка
+  for (int k = s_ntgt - 1; k >= 0; k--) {
+    if (!vis[k]) continue;
+    const MapTarget& t = s_tgt[k];
+    lv_color_t tc = col(targetColor(t.ch));
+    lv_point_t p0 = pos[k];
     lv_draw_rect_dsc_t ic; lv_draw_rect_dsc_init(&ic);
     ic.bg_opa = LV_OPA_COVER; ic.border_width = 0;
     bool missile = t.ch == 'C' || t.ch == 'K';
     float hr = (t.hd >= 0 ? t.hd : 0) * 0.0174533f, sx = sinf(hr), sy = -cosf(hr);
     for (int pass = 0; pass < 2; pass++) {
-      float s = pass ? 4.0f : 5.5f;
+      float s = pass ? S - 1.5f : S;
       ic.bg_color = pass ? tc : lv_color_black();
       lv_point_t pts[4];
       int n;
@@ -650,6 +790,130 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
       lv_draw_polygon(dc, &ic, pts, n);
     }
   }
+  // 3) підписи: «Шахед x2» (+ «· 38 км» при зумі); зсуваємо вниз, якщо налазять один на одного
+  lv_area_t used[MAX_TARGETS]; int nu = 0;
+  int maxLbl = s_zoom ? MAX_TARGETS : 4;
+  for (int k = 0; k < s_ntgt && k < maxLbl; k++) {
+    if (!vis[k]) continue;
+    const MapTarget& t = s_tgt[k];
+    char buf[40];
+    int n = snprintf(buf, sizeof(buf), "%s", targetName(t.ch));
+    if (t.n > 1) n += snprintf(buf + n, sizeof(buf) - n, " x%d", t.n);
+    if (s_zoom && haveU) snprintf(buf + n, sizeof(buf) - n, " · %d км", (int)(kmBetween(t.lat, t.lon, ula, ulo) + 0.5f));
+    lv_point_t sz; lv_txt_get_size(&sz, buf, &font_ua_12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int x = pos[k].x + (int)S + 2, y = pos[k].y - 7;
+    if (x + sz.x > c.x2) x = pos[k].x - (int)S - 2 - sz.x;
+    for (int tries = 0; tries < 4; tries++) {
+      lv_area_t a = {(lv_coord_t)x, (lv_coord_t)y, (lv_coord_t)(x + sz.x), (lv_coord_t)(y + sz.y)};
+      bool hit = false;
+      for (int u = 0; u < nu; u++) if (_lv_area_is_on(&a, &used[u])) { hit = true; break; }
+      if (!hit) break;
+      y += sz.y;
+    }
+    lv_area_t a = {(lv_coord_t)x, (lv_coord_t)y, (lv_coord_t)(x + sz.x), (lv_coord_t)(y + sz.y)};
+    used[nu++] = a;
+    lv_draw_rect_dsc_t bg; lv_draw_rect_dsc_init(&bg);
+    bg.bg_color = lv_color_black(); bg.bg_opa = LV_OPA_50; bg.radius = 3; bg.border_width = 0;
+    lv_area_t ba = {(lv_coord_t)(a.x1 - 2), a.y1, (lv_coord_t)(a.x2 + 1), (lv_coord_t)(a.y2 - 1)};
+    lv_draw_rect(dc, &bg, &ba);
+    ld.color = col(targetColor(t.ch)); ld.opa = LV_OPA_COVER;
+    lv_draw_label(dc, &ld, &a, buf, nullptr);
+  }
+}
+
+// маркер користувача під поточний вид
+static void placeMarker() {
+  if (!s_marker) return;
+  float la, lo;
+  int mx, my;
+  if (userPoint(la, lo)) { mx = (int)vx(s_view, lo); my = (int)vy(s_view, la); }
+  else if (g_set.oblast >= 0 && s_zoom == 0) { mx = MAP_CENTROID[g_set.oblast][0]; my = MAP_CENTROID[g_set.oblast][1]; }
+  else { mx = MAP_W / 2; my = MAP_H / 2; }
+  lv_obj_set_pos(s_marker, mx - 4, my - 4);
+}
+
+// перехід: рамка-«лупа» з прямокутника нового виду (у старих координатах) розтягується на всю мапу, ~180 мс
+static lv_area_t s_zoomFrom;
+static void zoomAnimCb(void* o, int32_t v) {
+  lv_obj_t* b = (lv_obj_t*)o;
+  int x1 = s_zoomFrom.x1 + (0 - s_zoomFrom.x1) * v / 256, y1 = s_zoomFrom.y1 + (0 - s_zoomFrom.y1) * v / 256;
+  int x2 = s_zoomFrom.x2 + (MAP_W - 1 - s_zoomFrom.x2) * v / 256, y2 = s_zoomFrom.y2 + (MAP_H - 1 - s_zoomFrom.y2) * v / 256;
+  lv_obj_set_pos(b, x1, y1);
+  lv_obj_set_size(b, LV_MAX(4, x2 - x1 + 1), LV_MAX(4, y2 - y1 + 1));
+  lv_obj_set_style_border_opa(b, (lv_opa_t)(255 - v * 3 / 4), 0);
+}
+static void zoomAnimDone(lv_anim_t* a) { lv_obj_add_flag((lv_obj_t*)a->var, LV_OBJ_FLAG_HIDDEN); }
+
+static void setZoom(int z, bool anim) {
+  const MapView* nv = viewFor(z);
+  if (!nv || !s_map || (z == s_zoom && nv == s_view)) return;
+  const MapView* ov = s_view;
+  // межі нового виду в пікселях старого (або навпаки при віддаленні)
+  const MapView* inner = z > s_zoom ? nv : ov;
+  const MapView* outer = z > s_zoom ? ov : nv;
+  float lo1 = (inner->minx + (0 - inner->offx) / inner->scale) / MAP_PROJ_COSLAT, la1 = -(inner->miny + (0 - inner->offy) / inner->scale);
+  float lo2 = (inner->minx + (MAP_W - inner->offx) / inner->scale) / MAP_PROJ_COSLAT, la2 = -(inner->miny + (MAP_H - inner->offy) / inner->scale);
+  s_zoomFrom.x1 = (lv_coord_t)LV_CLAMP(0, (int)vx(outer, lo1), MAP_W - 4); s_zoomFrom.y1 = (lv_coord_t)LV_CLAMP(0, (int)vy(outer, la1), MAP_H - 4);
+  s_zoomFrom.x2 = (lv_coord_t)LV_CLAMP(s_zoomFrom.x1 + 3, (int)vx(outer, lo2), MAP_W - 1); s_zoomFrom.y2 = (lv_coord_t)LV_CLAMP(s_zoomFrom.y1 + 3, (int)vy(outer, la2), MAP_H - 1);
+  bool zoomIn = z > s_zoom;
+  s_zoom = z; s_view = nv;
+  placeMarker();
+  lv_obj_invalidate(s_map);
+  if (s_zoomTag) {
+    static const char* ZT[3] = {"Україна", "Область", "Район"};
+    lv_label_set_text(s_zoomTag, ZT[z]);
+  }
+  if (anim && s_zoomBox) {
+    lv_obj_clear_flag(s_zoomBox, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_zoomBox);
+    lv_anim_t a; lv_anim_init(&a);
+    lv_anim_set_var(&a, s_zoomBox);
+    lv_anim_set_exec_cb(&a, zoomAnimCb);
+    lv_anim_set_values(&a, zoomIn ? 0 : 256, zoomIn ? 256 : 0);
+    lv_anim_set_time(&a, 180);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_ready_cb(&a, zoomAnimDone);
+    lv_anim_start(&a);
+  }
+}
+
+static void mapClickCb(lv_event_t*) {
+  int z = s_zoom;
+  for (int i = 0; i < 3; i++) {          // наступний доступний вид (без міста — лише Україна ↔ область)
+    z = (z + 1) % 3;
+    if (viewFor(z)) break;
+  }
+  s_manualZoomAt = millis() | 1;
+  setZoom(z, true);
+}
+
+// автозум: ціль поруч / рівень ≥ помаранчевий → район; загроза в області → область; чисто 2 хв → Україна
+static void autoZoom(const AppState& s) {
+  if (!g_set.autoZoom || !s_map) return;
+  if (s_manualZoomAt && millis() - s_manualZoomAt < 180000UL) return;
+  s_manualZoomAt = 0;
+  float ula, ulo; bool haveU = userPoint(ula, ulo);
+  float nearKm = 1e9f; bool inObl = false;
+  const MapView* ov = viewFor(1);
+  for (int i = 0; i < s.ntgt; i++) {
+    const MapTarget& t = s.tgt[i];
+    if (haveU) {
+      float d = kmBetween(t.lat, t.lon, ula, ulo);
+      for (int j = 0; j < t.npt; j++) d = LV_MIN(d, kmBetween(t.pla[j], t.plo[j], ula, ulo) + 15);   // курс на вас
+      nearKm = LV_MIN(nearKm, d);
+    }
+    if (ov) {
+      float x = vx(ov, t.lon), y = vy(ov, t.lat);
+      if (x >= 0 && x < MAP_W && y >= 0 && y < MAP_H) inObl = true;
+    }
+  }
+  int want = 0;
+  if (s.level >= LVL_ORANGE || nearKm < 45) want = viewFor(2) ? 2 : 1;
+  else if (s.level == LVL_YELLOW || inObl || nearKm < 150) want = 1;
+  if (!viewFor(want)) want = viewFor(1) ? 1 : 0;
+  uint32_t now = millis();
+  if (want >= s_zoom) { if (want > 0) s_autoHoldAt = now; if (want > s_zoom) setZoom(want, true); }
+  else if (now - s_autoHoldAt > 120000UL) setZoom(want, true);
 }
 
 static void markerAnimCb(void* o, int32_t v) {
@@ -658,7 +922,7 @@ static void markerAnimCb(void* o, int32_t v) {
 }
 
 static void frameAnimCb(void* o, int32_t v);
-static void mainDeleted(lv_event_t*) { s_main = nullptr; s_frame = nullptr; lv_anim_del(nullptr, frameAnimCb); }
+static void mainDeleted(lv_event_t*) { s_main = nullptr; s_frame = nullptr; s_map = nullptr; s_marker = s_zoomBox = s_zoomTag = nullptr; lv_anim_del(nullptr, zoomAnimCb); lv_anim_del(nullptr, frameAnimCb); }
 static void settingsBtnCb(lv_event_t*) { showSettings(); }
 static void showDetail();
 static void cardCb(lv_event_t*) { notifySilence(); showDetail(); }   // дотик до картки — тиша до наступного підвищення
@@ -738,21 +1002,16 @@ static void showMain() {
   lv_obj_set_size(s_map, MAP_W, MAP_H);
   lv_obj_set_pos(s_map, 0, 27);
   lv_obj_add_event_cb(s_map, mapDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
-  lv_obj_clear_flag(s_map, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(s_map, mapClickCb, LV_EVENT_CLICKED, nullptr);   // дотик — зум Україна → область → район
+  lv_obj_add_flag(s_map, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(s_map, LV_OBJ_FLAG_SCROLLABLE);
+  if (!viewFor(s_zoom)) { s_zoom = 0; }
+  s_view = viewFor(s_zoom);
 
   // маркер користувача
-  float lat, lon; bool have = false;
-  const CityDef* c = userCity();
-  int mx = 0, my = 0;
-  if (c) { lat = c->lat; lon = c->lon; have = true; }
-  if (have) {
-    mx = (int)((lon * MAP_PROJ_COSLAT - MAP_PROJ_MINX) * MAP_PROJ_SCALE + MAP_PROJ_OFFX);
-    my = (int)((-lat - MAP_PROJ_MINY) * MAP_PROJ_SCALE + MAP_PROJ_OFFY);
-  } else if (g_set.oblast >= 0) {
-    mx = MAP_CENTROID[g_set.oblast][0]; my = MAP_CENTROID[g_set.oblast][1];
-  }
   s_marker = lv_obj_create(s_map);
   lv_obj_remove_style_all(s_marker);
+  lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_size(s_marker, 9, 9);
   lv_obj_set_style_radius(s_marker, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(s_marker, col(0xFFFFFF), 0);
@@ -761,7 +1020,23 @@ static void showMain() {
   lv_obj_set_style_border_width(s_marker, 2, 0);
   lv_obj_set_style_shadow_color(s_marker, col(0xFFFFFF), 0);
   lv_obj_set_style_shadow_width(s_marker, 4, 0);
-  lv_obj_set_pos(s_marker, mx - 4, my - 4);
+  placeMarker();
+  // рамка переходу між видами + мітка поточного зуму
+  s_zoomBox = lv_obj_create(s_map);
+  lv_obj_remove_style_all(s_zoomBox);
+  lv_obj_clear_flag(s_zoomBox, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_border_color(s_zoomBox, col(C_ACCENT), 0);
+  lv_obj_set_style_border_width(s_zoomBox, 2, 0);
+  lv_obj_set_style_radius(s_zoomBox, 3, 0);
+  lv_obj_add_flag(s_zoomBox, LV_OBJ_FLAG_HIDDEN);
+  s_zoomTag = mkLabel(s_map, "", &font_ua_12, C_MUTED);
+  lv_obj_clear_flag(s_zoomTag, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_color(s_zoomTag, col(C_BG), 0);
+  lv_obj_set_style_bg_opa(s_zoomTag, LV_OPA_60, 0);
+  lv_obj_set_style_pad_hor(s_zoomTag, 3, 0);
+  lv_obj_set_style_radius(s_zoomTag, 3, 0);
+  lv_obj_align(s_zoomTag, LV_ALIGN_BOTTOM_LEFT, 2, -1);
+  { static const char* ZT[3] = {"Україна", "Область", "Район"}; lv_label_set_text(s_zoomTag, ZT[s_zoom]); }
   lv_anim_t a; lv_anim_init(&a);
   lv_anim_set_var(&a, s_marker);
   lv_anim_set_exec_cb(&a, markerAnimCb);
@@ -908,6 +1183,8 @@ static void updateMain(bool full) {
     s_out = snap.outage;
     s_ntgt = snap.trkOk ? snap.ntgt : 0;
     memcpy(s_tgt, snap.tgt, sizeof(s_tgt));
+    s_heat = snap.heat;
+    strlcpy(s_ltName, snap.ltName, sizeof(s_ltName)); s_ltP = snap.trkOk ? snap.ltP : 0;
     lv_obj_invalidate(s_map);
     int cnt = 0;
     if (snap.regionsFine) {
@@ -956,8 +1233,14 @@ static void updateMain(bool full) {
       else snprintf(pre, sizeof(pre), "P(близько) %d%% · цілей %d  ·  ", pn, snap.ntgt);
       line = String(pre) + line;
     }
+    if (s_ltP >= 5 && s_ltName[0]) {
+      char pre[64];
+      snprintf(pre, sizeof(pre), "ймовірна ціль: %s %d%%  ·  ", s_ltName, s_ltP);
+      line = String(pre) + line;
+    }
     lv_label_set_text(s_cardText, line.c_str());
   }
+  autoZoom(snap);
   // графік відключень: щохвилини (зміна півгодинки) або при оновленні даних
   static uint32_t lastOutUi = 0;
   if (changed || millis() - lastOutUi > 30000) {
@@ -1004,7 +1287,7 @@ static void showDetail() {
   lv_obj_set_style_radius(cont, 0, 0);
   lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_row(cont, 6, 0);
-  stateLock(); AppState s = g_state; stateUnlock();
+  static AppState s; stateLock(); s = g_state; stateUnlock();   // static: AppState завеликий для стеку
   char os = userOblastStatus();
   const char* osTxt = os == 'A' || os == 'R' ? "тривога" : os == 'Y' ? "попередня загроза" : os == 'P' ? "часткова тривога" : os == 'N' ? "тривоги немає" : "невідомо";
   int me = userRegion();
@@ -1215,11 +1498,27 @@ static void showSettings() {
     g_set.alertOnYellow = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
 
+  r = settingRow(list, "Автозум мапи до загрози");
+  sw = lv_switch_create(r);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (g_set.autoZoom) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, [](lv_event_t* e) {
+    g_set.autoZoom = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  r = settingRow(list, "Типові маршрути (зум)");
+  sw = lv_switch_create(r);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (g_set.showRoutes) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, [](lv_event_t* e) {
+    g_set.showRoutes = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+
   mkListBtn(list, LV_SYMBOL_PLAY, "Тест: загроза в області (жовтий)", testYCb, nullptr);
   mkListBtn(list, LV_SYMBOL_PLAY, "Тест: курс на місто (помаранчевий)", testOCb, nullptr);
   mkListBtn(list, LV_SYMBOL_PLAY, "Тест: небезпека поруч (червоний)", testRCb, nullptr);
   mkListBtn(list, LV_SYMBOL_TRASH, "Скинути всі налаштування", resetCb, nullptr);
-  String info = "IP " + WiFi.localIP().toString() + " · RAM " + String(ESP.getFreeHeap() / 1024) + " КБ · v1.1";
+  String info = "IP " + WiFi.localIP().toString() + " · RAM " + String(ESP.getFreeHeap() / 1024) + " КБ · v1.2";
   lv_list_add_text(list, info.c_str());
   loadScreen(scr);
 }

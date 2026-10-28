@@ -30,6 +30,8 @@ struct Settings {
   uint8_t brightness = 200;
   bool sound = true;
   bool alertOnYellow = true;   // звуковий сигнал на жовтому рівні (дрони в області)
+  bool autoZoom = true;        // мапа сама наближається до області / району, коли ціль поруч
+  bool showRoutes = false;     // шар «типові маршрути» (історична модель) на зумі області
   // графік відключень світла
   uint8_t outMode = OUT_MODE_AUTO;   // OUT_MODE_OFF / AUTO / MANUAL
   int8_t outGroup = -1;              // індекс у OUTAGE_GROUPS ("1.1".."6.2"), -1 — не обрано
@@ -72,6 +74,15 @@ struct MapTarget {
 };
 
 // ------------------------------- Загальний стан -------------------------------
+// Теплова карта типових маршрутів (з data/history_model.json, сервер вирізає вікно навколо області)
+#define HEAT_MAX (28 * 18)
+#define HEAT_STEP 0.25f
+struct RouteHeat {
+  float la0 = 0, lo0 = 0;           // північно-західний кут (центр першої комірки)
+  uint8_t w = 0, h = 0;             // колонок / рядків
+  uint8_t v[HEAT_MAX];              // 0..35 — інтенсивність
+};
+
 struct AppState {
   char oblasts[OBLAST_COUNT + 1];   // 'N','P','A','Y','R' ('?' — немає даних)
   // райони (порядок MAP_REGIONS): '.' немає, 'Y'/'y' дрони/невідомо (мала — частково, громади),
@@ -106,6 +117,9 @@ struct AppState {
   int8_t eta = -1;                  // хв до найближчого ймовірного прольоту
   uint8_t ntgt = 0;
   MapTarget tgt[MAX_TARGETS];
+  char ltName[28] = {0};            // історична модель: найімовірніша ціль атаки поблизу ("Кременчук")
+  uint8_t ltP = 0;                  // ... її ймовірність, %
+  RouteHeat heat;                   // типові маршрути (комірки 0.25°) навколо вашої області
 
   Level level = LVL_GREEN;          // підсумковий рівень для адреси користувача
   OutageInfo outage;                // графік відключень (обраної черги)

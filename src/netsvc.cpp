@@ -229,6 +229,43 @@ static Level parseLevel(const char* s) {
   return LVL_GREEN;
 }
 
+// Цілі трекера + історичний пріор (ймовірна ціль, теплова карта маршрутів). Викликати під stateLock.
+static void parseTargets(JsonDocument& doc) {
+  g_state.ntgt = 0;
+  for (JsonObject t : doc["tgt"].as<JsonArray>()) {
+    if (g_state.ntgt >= MAX_TARGETS) break;
+    MapTarget& m = g_state.tgt[g_state.ntgt++];
+    const char* ch = t["c"] | "U";
+    m.ch = ch[0];
+    m.lat = t["la"] | 0.0f; m.lon = t["lo"] | 0.0f;
+    m.hd = t["hd"] | -1;
+    m.p = constrain((int)(t["p"] | 0), 0, 100);
+    m.eta = (int8_t)constrain((int)(t["e"] | -1), -1, 99);
+    m.n = constrain((int)(t["n"] | 1), 1, 99);
+    m.npt = 0;
+    for (JsonArray pt : t["pt"].as<JsonArray>()) {
+      if (m.npt >= 3 || pt.size() < 3) break;
+      m.pla[m.npt] = pt[0]; m.plo[m.npt] = pt[1]; m.psd[m.npt] = constrain((int)pt[2], 0, 99);
+      m.npt++;
+    }
+  }
+  strlcpy(g_state.ltName, doc["lt"] | "", sizeof(g_state.ltName));
+  g_state.ltP = constrain((int)(doc["lp"] | 0), 0, 100);
+  JsonObject hm = doc["hm"];
+  const char* v = hm["v"] | "";
+  int w = hm["w"] | 0, h = hm["h"] | 0;
+  if (w > 0 && h > 0 && w * h <= HEAT_MAX && (int)strlen(v) == w * h) {
+    RouteHeat& r = g_state.heat;
+    r.la0 = hm["la"] | 0.0f; r.lo0 = hm["lo"] | 0.0f; r.w = w; r.h = h;
+    for (int i = 0; i < w * h; i++) {
+      char c = v[i];
+      r.v[i] = c >= '0' && c <= '9' ? c - '0' : (c >= 'a' && c <= 'z' ? c - 'a' + 10 : 0);
+    }
+  } else if (!hm.isNull()) {
+    g_state.heat.w = g_state.heat.h = 0;
+  }
+}
+
 static String serverBase() {
   String url = g_set.server;
   if (url.endsWith("/")) url.remove(url.length() - 1);
@@ -266,26 +303,10 @@ static bool applyStatic(JsonDocument& doc, bool& gotOblasts) {
     g_state.pMissile = doc["p_missile"] | 0;
     g_state.pBallistic = doc["ballistic"] | 0;
     g_state.eta = (int8_t)constrain((int)(doc["eta"] | -1), -1, 99);
-    for (JsonObject t : doc["tgt"].as<JsonArray>()) {
-      if (g_state.ntgt >= MAX_TARGETS) break;
-      MapTarget& m = g_state.tgt[g_state.ntgt++];
-      const char* ch = t["c"] | "U";
-      m.ch = ch[0];
-      m.lat = t["la"] | 0.0f; m.lon = t["lo"] | 0.0f;
-      m.hd = t["hd"] | -1;
-      m.p = constrain((int)(t["p"] | 0), 0, 100);
-      m.eta = (int8_t)constrain((int)(t["e"] | -1), -1, 99);
-      m.n = constrain((int)(t["n"] | 1), 1, 99);
-      m.npt = 0;
-      for (JsonArray pt : t["pt"].as<JsonArray>()) {
-        if (m.npt >= 3 || pt.size() < 3) break;
-        m.pla[m.npt] = pt[0]; m.plo[m.npt] = pt[1]; m.psd[m.npt] = constrain((int)pt[2], 0, 99);
-        m.npt++;
-      }
-    }
+    parseTargets(doc);
   } else {
     g_state.trkLevel = LVL_GREEN; g_state.pNear = g_state.pDrone = g_state.pMissile = g_state.pBallistic = 0;
-    g_state.eta = -1;
+    g_state.eta = -1; g_state.ltP = 0;
   }
   g_state.level = computeFinalLevel(g_state);
   g_state.version++;
@@ -424,23 +445,7 @@ static bool fetchServer(bool& gotOblasts) {
   g_state.pBallistic = doc["ballistic"] | 0;
   g_state.eta = (int8_t)constrain((int)(doc["eta"] | -1), -1, 99);
   g_state.ntgt = 0;
-  for (JsonObject t : doc["tgt"].as<JsonArray>()) {
-    if (g_state.ntgt >= MAX_TARGETS) break;
-    MapTarget& m = g_state.tgt[g_state.ntgt++];
-    const char* c = t["c"] | "U";
-    m.ch = c[0];
-    m.lat = t["la"] | 0.0f; m.lon = t["lo"] | 0.0f;
-    m.hd = t["hd"] | -1;
-    m.p = constrain((int)(t["p"] | 0), 0, 100);
-    m.eta = (int8_t)constrain((int)(t["e"] | -1), -1, 99);
-    m.n = constrain((int)(t["n"] | 1), 1, 99);
-    m.npt = 0;
-    for (JsonArray pt : t["pt"].as<JsonArray>()) {
-      if (m.npt >= 3 || pt.size() < 3) break;
-      m.pla[m.npt] = pt[0]; m.plo[m.npt] = pt[1]; m.psd[m.npt] = constrain((int)pt[2], 0, 99);
-      m.npt++;
-    }
-  }
+  parseTargets(doc);
   s_srvAt = millis();
   g_state.level = computeFinalLevel(g_state);
   g_state.version++;
