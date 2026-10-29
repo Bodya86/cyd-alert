@@ -1355,14 +1355,11 @@ static void updateMain(bool full) {
     memcpy(s_tgt, snap.tgt, sizeof(s_tgt));
     s_heat = snap.heat;
     lv_obj_invalidate(s_map);
+    // Велике число — кількість ОБЛАСТЕЙ з тривогою (повністю або частково), як на alerts.in.ua.
+    // Раніше при районних даних тут рахувались райони (до ~50 з 139 — разом із Кримом/Донеччиною/Луганщиною).
     int cnt = 0;
-    if (snap.regionsFine) {
-      for (int i = 0; i < MAP_REGION_COUNT; i++) if (s_rg[i] == 'R' || s_rg[i] == 'Y') cnt++;
-      lv_label_set_text(s_lblCountSub, "районів");
-    } else {
-      for (int i = 0; i < OBLAST_COUNT; i++) if (s_ob[i] == 'A' || s_ob[i] == 'R') cnt++;
-      lv_label_set_text(s_lblCountSub, "областей");
-    }
+    for (int i = 0; i < OBLAST_COUNT; i++) if (s_ob[i] == 'A' || s_ob[i] == 'P' || s_ob[i] == 'R' || s_ob[i] == 'Y') cnt++;
+    lv_label_set_text(s_lblCountSub, "областей");
     if (snap.alertsOk) lv_label_set_text_fmt(s_lblCount, "%d", cnt);
     else lv_label_set_text(s_lblCount, "?");
 
