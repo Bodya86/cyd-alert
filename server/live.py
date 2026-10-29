@@ -119,6 +119,27 @@ class NewsLoop:
             self.saved_n = n
 
 
+_prim = {"at": 0.0, "alive": False}
+
+
+def primary_notifies():
+    """Чи надсилає сповіщення основний сервер (Lightsail, PRIMARY_URL/api/health)? Тоді GitHub-резерв мовчить,
+    щоб не було дублів. Перевірка раз на 60 с; помилка/старі дані → резерв надсилає сам."""
+    url = os.environ.get("PRIMARY_URL", "").rstrip("/")
+    if not url:
+        return False
+    if time.time() - _prim["at"] > 60:
+        _prim["at"] = time.time()
+        try:
+            import urllib.request
+            with urllib.request.urlopen(urllib.request.Request(url + "/api/health", headers={"User-Agent": "cyd-live"}), timeout=8) as r:
+                h = json.loads(r.read().decode("utf-8"))
+            _prim["alive"] = bool(h.get("ok") and h.get("notify") and abs(time.time() - float(h.get("now", 0))) < 120)
+        except Exception:  # noqa: BLE001
+            _prim["alive"] = False
+    return _prim["alive"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="public")
@@ -181,7 +202,8 @@ def main():
             if do_out:
                 last_out = time.time()
             try:
-                notifier.tick()
+                if not primary_notifies():
+                    notifier.tick()
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
             try:

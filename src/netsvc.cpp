@@ -285,6 +285,7 @@ static long staticAgeS() {
 }
 static void cloudFromStatic(JsonDocument& doc, long age);
 static void tgAggregate();
+static bool s_rtApplying = false;   // applyStatic викликано з реалтайм-сервера (дані свіжі, тривоги — JAAM)
 static bool applyStatic(JsonDocument& doc, bool& gotOblasts) {
   time_t gen = (time_t)(doc["generated"] | 0L), nowT = time(nullptr);
   s_staticGen = gen;
@@ -296,9 +297,9 @@ static bool applyStatic(JsonDocument& doc, bool& gotOblasts) {
   stateLock();
   bool alertsOk = g_state.alertsOk;
   stateUnlock();
-  if (!alertsOk && age < 10 * 60 && strlen(ob) >= OBLAST_COUNT) {
+  if ((s_rtApplying ? age < 10 * 60 : !alertsOk && age < 10 * 60) && strlen(ob) >= OBLAST_COUNT) {
     bool fine = strlen(rs) == MAP_REGION_COUNT;
-    publishAlerts(ob, fine ? rs : nullptr, fine && strcmp(src, "ubilling") != 0, "GitHub");
+    publishAlerts(ob, fine ? rs : nullptr, fine && strcmp(src, "ubilling") != 0, s_rtApplying ? "сервер" : "GitHub");
     gotOblasts = true;
   }
   cloudFromStatic(doc, age);
@@ -797,6 +798,105 @@ static void outageManualOrOff() {
   stateUnlock();
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Реалтайм-сервер: мінімальний WebSocket-клієнт (ws://, лише текстові кадри від сервера, ping→pong).
+static WiFiClient s_ws;
+static bool s_wsUp = false;
+static uint32_t s_wsRetryAt = 0, s_wsRx = 0, s_rtAt = 0, s_rtPollAt = 0;
+static String s_wsPath, s_rtEtag;
+static bool rtWanted() {
+  if (!RT_SERVER_HOST[0]) return false;
+  String b = serverBase();
+  return b.indexOf("github.io") >= 0 || b.indexOf(RT_SERVER_HOST) >= 0;
+}
+static String rtStatePath() {
+  const CityDef* c = userCity();
+  const DistrictDef* d = userDistrict();
+  String path = "api/state";
+  if (c) path += String("/") + c->id + (d ? String("/") + d->id : String("")) + ".json";
+  else path += ".json";
+  return path;
+}
+static bool rtApply(const char* body, size_t len) {
+  JsonDocument doc;
+  if (deserializeJson(doc, body, len)) return false;
+  bool got = false;
+  s_rtApplying = true;
+  applyStatic(doc, got);
+  s_rtApplying = false;
+  s_ghSrc = s_wsUp ? "сервер WS" : "сервер";
+  s_rtAt = millis();
+  return true;
+}
+static void wsSend(uint8_t op, const uint8_t* p, size_t n) {   // клієнт зобов'язаний маскувати кадри
+  uint8_t h[8] = {(uint8_t)(0x80 | op), (uint8_t)(0x80 | (n & 0x7F))};
+  uint32_t m = esp_random();
+  memcpy(h + 2, &m, 4);
+  s_ws.write(h, 6);
+  for (size_t i = 0; i < n; i++) { uint8_t b = p[i] ^ h[2 + (i & 3)]; s_ws.write(&b, 1); }
+}
+static void wsClose() { s_ws.stop(); s_wsUp = false; }
+static bool wsConnect() {
+  s_ws.setTimeout(5);
+  if (!s_ws.connect(RT_SERVER_HOST, 80, 5000)) return false;
+  s_wsPath = rtStatePath();
+  s_ws.print(String("GET /ws?path=") + s_wsPath + " HTTP/1.1\r\nHost: " RT_SERVER_HOST "\r\nUpgrade: websocket\r\n"
+             "Connection: Upgrade\r\nSec-WebSocket-Key: Y3lkLWFsZXJ0LWVzcDMyIQ==\r\nSec-WebSocket-Version: 13\r\n"
+             "User-Agent: CYD-Alert/" FW_VERSION "\r\n\r\n");
+  String st = s_ws.readStringUntil('\n');
+  if (st.indexOf(" 101") < 0) { Serial.printf("[ws] handshake: %s\n", st.c_str()); wsClose(); return false; }
+  for (int i = 0; i < 30; i++) { String l = s_ws.readStringUntil('\n'); if (l.length() <= 1) break; }
+  s_wsUp = true; s_wsRx = millis();
+  Serial.printf("[ws] connected %s\n", s_wsPath.c_str());
+  return true;
+}
+static bool wsReadN(uint8_t* b, size_t n) { return s_ws.readBytes(b, n) == n; }
+static void wsPump() {                 // усі кадри, що вже прийшли (не блокує, якщо даних немає)
+  while (s_wsUp && s_ws.available() >= 2) {
+    uint8_t h[2];
+    if (!wsReadN(h, 2)) { wsClose(); return; }
+    uint8_t op = h[0] & 0x0F;
+    uint64_t n = h[1] & 0x7F;
+    if (n == 126) { uint8_t e[2]; if (!wsReadN(e, 2)) { wsClose(); return; } n = (e[0] << 8) | e[1]; }
+    else if (n == 127) { uint8_t e[8]; if (!wsReadN(e, 8)) { wsClose(); return; } n = 0; for (int i = 4; i < 8; i++) n = (n << 8) | e[i]; }
+    if (n > 48000) { Serial.println("[ws] frame too big"); wsClose(); return; }
+    char* buf = (char*)malloc(n + 1);
+    if (!buf) { wsClose(); return; }
+    if (n && !wsReadN((uint8_t*)buf, n)) { free(buf); wsClose(); return; }
+    buf[n] = 0;
+    s_wsRx = millis();
+    if (op == 0x9) wsSend(0xA, (uint8_t*)buf, n < 125 ? n : 125);             // ping → pong
+    else if (op == 0x8) { free(buf); wsClose(); return; }
+    else if (op == 0x1 && !(h[0] & 0x80)) { Serial.println("[ws] fragmented"); free(buf); wsClose(); return; }
+    else if (op == 0x1) { if (!rtApply(buf, n)) Serial.println("[ws] bad json"); }
+    if (op == 0x9 || op == 0xA) s_rtAt = millis();   // з'єднання живе → дані актуальні (сервер шле зміни сам)
+    free(buf);
+  }
+}
+// → true, якщо реалтайм-сервер дав свіжі дані (тоді GitHub не опитуємо)
+static bool rtTick(bool force) {
+  if (!rtWanted()) { if (s_wsUp) wsClose(); return false; }
+  uint32_t now = millis();
+  if (s_wsUp && (force || rtStatePath() != s_wsPath)) wsClose();       // змінилось місто/район
+  if (!s_wsUp && (int32_t)(now - s_wsRetryAt) >= 0) {
+    if (!wsConnect()) s_wsRetryAt = now + 20000;
+  }
+  if (s_wsUp) {
+    wsPump();
+    if (s_wsUp && (!s_ws.connected() || now - s_wsRx > 70000)) { Serial.println("[ws] lost"); wsClose(); s_wsRetryAt = now + 3000; }
+  }
+  if (!s_wsUp && (force || now - s_rtPollAt > POLL_RT_MS)) {         // WS недоступний → HTTP-опитування з ETag
+    s_rtPollAt = now;
+    Req r;
+    r.begin(String("http://" RT_SERVER_HOST "/static/") + rtStatePath(), nullptr, nullptr, nullptr, &s_rtEtag);
+    if (r.code == 304) s_rtAt = now;
+    else if (r.code == 200) { s_rtEtag = r.etag; String b = r.http.getString(); rtApply(b.c_str(), b.length()); }
+    else Serial.printf("[rt] http %d\n", r.code);
+  }
+  return s_rtAt && now - s_rtAt < 90000;
+}
+
 // ----------------------------------------------------------------------------------------------
 static void netTask(void*) {
   uint32_t lastAlerts = 0, lastTg = 0, lastSrv = 0, lastOut = 0, outEvery = OUTAGE_POLL_MS;
@@ -810,7 +910,9 @@ static void netTask(void*) {
     bool haveServer = g_set.server.length() > 0;
     bool srvOblasts = false;
     uint32_t srvEvery = (haveServer && serverIsStatic()) ? staticPollMs() : POLL_SERVER_MS;
-    if (haveServer && (first || force || now - lastSrv > srvEvery)) {
+    bool rtOk = haveServer && rtTick(first || force);
+    if (rtOk) srvOblasts = true;   // тривоги й цілі — із сервера (JAAM), власне опитування тривог не потрібне
+    if (haveServer && !rtOk && (first || force || now - lastSrv > srvEvery)) {
       lastSrv = now;
       if (!fetchServer(srvOblasts)) Serial.println("[server] fail -> fallback");
     }

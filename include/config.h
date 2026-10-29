@@ -12,6 +12,13 @@
 // Інтервали опитування (мс)
 #define POLL_ALERTS_MS      20000UL   // alerts.in.ua: ліміт ~8-10 запитів/хв з IP
 #define POLL_TELEGRAM_MS    45000UL   // пряме читання t.me/s/... (сторінка ~150 КБ)
+// Реалтайм-сервер (Lightsail, server/rt_server.py): WebSocket-push стану (ws://<host>/ws), без нього — HTTP-опитування
+// http://<host>/static/api/state/... кожні POLL_RT_MS, а якщо й він недоступний — як раніше, GitHub (адреса з налаштувань).
+// Вмикається, коли в налаштуваннях стоїть стандартна адреса GitHub Pages (або адреса цього сервера). "" — вимкнено.
+#ifndef RT_SERVER_HOST
+#define RT_SERVER_HOST ""
+#endif
+#define POLL_RT_MS          4000UL
 #define POLL_SERVER_MS      10000UL   // companion-сервер
 #define POLL_STATIC_MS      75000UL   // хмара (гілка data через api.github.com без токена: ≤48 запитів/год; з токеном 20 с)
 #define POLL_ACTIVE_MS      30000UL   // alerts.in.ua /v1/alerts/active.json (райони + тип загрози)
