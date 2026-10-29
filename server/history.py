@@ -11,6 +11,7 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PATH = os.path.join(ROOT, "data", "history_model.json")
+PARAMS_PATH = os.path.join(ROOT, "data", "model_params.json")   # tools/recalibrate.py (щотижня)
 KM_LAT = 111.2
 B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 
@@ -35,6 +36,12 @@ class History:
         self.base, self.gamma, self.lam = p.get("base", 0.15), p.get("gamma", 0.7), p.get("lam", 180.0)
         self.stats = d.get("stats", {})
         self.hmax = max(self.heat.values(), default=1.0)
+        self.prior_mix = 0.6      # частка частинок з курсом з історичного поля (коли курс невідомий)
+        try:
+            with open(PARAMS_PATH, encoding="utf-8") as f:
+                self.prior_mix = min(1.0, max(0.0, float(json.load(f).get("prior_mix", 0.6))))
+        except (OSError, ValueError):
+            pass
 
     @classmethod
     def load(cls, path=DEFAULT_PATH):

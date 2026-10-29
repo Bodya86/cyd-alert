@@ -38,6 +38,10 @@ HIT_WORDS = ("вибух", "взрыв", "прильот", "прилет", "вл
 TYPE_EXTRA = [("jet", ("швидкісн", "скоростн")), ("shahed", ("🅿", "🛵", "мопед"))]
 DRONES = ("shahed", "jet", "unknown", None)
 TRK_W = 0.3     # вага переходів із ланцюжків положень (асоціація «та сама ціль» ненадійна) проти явних «курсом на»
+try:            # щотижнева перекалібровка (tools/recalibrate.py) може змінити вагу
+    TRK_W = float(json.load(open(os.path.join(ROOT, "data", "model_params.json"), encoding="utf-8")).get("trk_w", TRK_W))
+except (OSError, ValueError):
+    pass
 PRIOR_GAMMA, PRIOR_LAMBDA = 0.7, 180.0   # «привабливість» (1+згадок)^γ · exp(−d/λ)
 PAIR_BASE = 0.15  # вага апріорі «відстань × влучання» проти історичних пар «звідки → куди» (підбирається на валідації)
 

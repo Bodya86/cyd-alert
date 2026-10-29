@@ -33,15 +33,20 @@ jobs:
           restore-keys: history-raw-
       - name: Collect posts (incremental)
         run: python tools/history_collect.py --days 180 --pages 400 --delay 0.8
+      # ваги trk_w / prior_mix: сітка на останніх 60 хвилях; data/model_params.json змінюється лише якщо краще на holdout
+      - name: Recalibrate weights
+        run: python tools/recalibrate.py --waves 60
       - name: Build model
         run: |
           python tools/history_model.py --out data/history_model.json
           python -m unittest discover -s server -p "test_history.py"
       - name: Commit if changed
         run: |
-          if git diff --quiet -- data/history_model.json; then echo "без змін"; exit 0; fi
+          F="data/history_model.json data/model_params.json data/calibration_log.json"
+          if git diff --quiet -- $F; then echo "без змін"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/history_model.json
-          git commit -m "history: weekly route model update"
+          git add $F
+          git commit -m "history: weekly route model update + recalibration"
+          git pull --rebase -q origin main
           git push

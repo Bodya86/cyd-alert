@@ -144,6 +144,31 @@ def jaam_snapshot(wait_s):
     return bool(upd)
 
 
+def _write_if_changed(path, text):
+    if not os.path.exists(path) or open(path, encoding="utf-8").read() != text:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
+def stats_html():
+    """stats.html — точність прогнозів: живий журнал (acc/summary.json з гілки data), бектест моделі, перекалібровки."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def lj(name, default):
+        try:
+            with open(os.path.join(root, "data", name), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return default
+    hm = lj("history_model.json", {})
+    bt = {"backtest": hm.get("backtest"), "built": hm.get("built"), "stats": hm.get("stats")} if hm else None
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_stats.html"), encoding="utf-8") as f:
+        html = f.read()
+    return (html.replace("%CALIB%", json.dumps(lj("calibration_log.json", []), ensure_ascii=False))
+                .replace("%BACKTEST%", json.dumps(bt, ensure_ascii=False))
+                .replace("%PARAMS%", json.dumps(lj("model_params.json", {}), ensure_ascii=False)))
+
+
 def write_outputs(out, state_path, chans, do_outage=True, next_in=300):
     """Пише всі api/*.json (лише змінені), index.html і стан трекера. → кількість state-файлів."""
     gen = int(time.time())
@@ -215,6 +240,7 @@ def write_outputs(out, state_path, chans, do_outage=True, next_in=300):
     if not os.path.exists(ip) or open(ip, encoding="utf-8").read() != html:
         with open(ip, "w", encoding="utf-8") as f:
             f.write(html)
+    _write_if_changed(os.path.join(out, "stats.html"), stats_html())
     open(os.path.join(out, ".nojekyll"), "w").close()
     st = tk.tracker_dump(srv.trk, {"prev_lvl": srv._prev_lvl, "jaam_ev_seen": srv._jaam_ev_seen, "saved": gen})
     wjson(state_path, st, force=True)

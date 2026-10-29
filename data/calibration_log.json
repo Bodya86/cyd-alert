@@ -1,0 +1,32 @@
+[
+ {
+  "ts": 1793259163,
+  "waves": 204,
+  "val_waves": 30,
+  "holdout_waves": 30,
+  "holdout_steps": 6117,
+  "current": {
+   "trk_w": 0.3,
+   "prior_mix": 0.6
+  },
+  "proposed": {
+   "trk_w": 0.3,
+   "prior_mix": 0.8
+  },
+  "holdout": {
+   "current": {
+    "ll": -2.0288,
+    "top1": 0.201
+   },
+   "proposed": {
+    "ll": -2.0343,
+    "top1": 0.201
+   },
+   "uniform": {
+    "ll": -2.0794,
+    "top1": 0.125
+   }
+  },
+  "accepted": false
+ }
+]

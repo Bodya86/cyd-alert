@@ -1,11 +1,14 @@
 // CYD Alert — карта повітряних тривог України для ESP32-2432S028 (Cheap Yellow Display)
 #include "app.h"
+#include "ota.h"
+#include "version.h"
 #include <WiFi.h>
 #include <lvgl.h>
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n[CYD Alert] start");
+  Serial.println("\n[CYD Alert] start v" FW_VERSION " (" FW_ENV ")");
+  otaMarkValid();
   settingsLoad();
   notifyInit();
   hwInit();

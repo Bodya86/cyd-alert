@@ -33,9 +33,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Pillow (мапа для Telegram-сповіщень)
+        continue-on-error: true
+        run: pip install -q pillow
+
       - name: Live loop (publish to data branch)
         env:
           TZ: Europe/Kyiv
           UKRAINEALARM_KEY: ${{ secrets.UKRAINEALARM_KEY }}
           ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
+          # Telegram-сповіщення (data/notify.json). Без секретів — нічого не надсилається.
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python server/live.py --out public --minutes 350 --interval 60 --branch data --push

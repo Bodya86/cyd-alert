@@ -4,6 +4,8 @@
 #include "textutil.h"
 #include "map_meta.h"
 #include "map_views_meta.h"
+#include "ota.h"
+#include "version.h"
 #include <WiFi.h>
 #include <lvgl.h>
 #include <vector>
@@ -1580,11 +1582,22 @@ static void showSettings() {
     g_set.showRoutes = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
 
+  r = settingRow(list, "Автооновлення");
+  sw = lv_switch_create(r);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (g_set.autoUpdate) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, [](lv_event_t* e) {
+    g_set.autoUpdate = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+  String up = String("Перевірити оновлення · v") + FW_VERSION;
+  if (g_ota.remote[0]) up += otaCompare(g_ota.remote, FW_VERSION) > 0 ? String(" → v") + g_ota.remote : String(" (остання)");
+  mkListBtn(list, LV_SYMBOL_REFRESH, up.c_str(), [](lv_event_t*) { otaRequestCheck(); toast("Перевіряю оновлення…"); }, nullptr);
+
   mkListBtn(list, LV_SYMBOL_PLAY, "Тест: загроза в області (жовтий)", testYCb, nullptr);
   mkListBtn(list, LV_SYMBOL_PLAY, "Тест: курс на місто (помаранчевий)", testOCb, nullptr);
   mkListBtn(list, LV_SYMBOL_PLAY, "Тест: небезпека поруч (червоний)", testRCb, nullptr);
   mkListBtn(list, LV_SYMBOL_TRASH, "Скинути всі налаштування", resetCb, nullptr);
-  String info = "IP " + WiFi.localIP().toString() + " · RAM " + String(ESP.getFreeHeap() / 1024) + " КБ · v1.2";
+  String info = "IP " + WiFi.localIP().toString() + " · RAM " + String(ESP.getFreeHeap() / 1024) + " КБ · v" FW_VERSION " · " FW_ENV;
   lv_list_add_text(list, info.c_str());
   loadScreen(scr);
 }
@@ -1807,10 +1820,60 @@ void uiInit() {
   else showConnecting(g_set.ssid, g_set.pass, false);
 }
 
+// ------------------------------- OTA: екран прогресу -------------------------------
+static lv_obj_t *s_otaBox = nullptr, *s_otaBar = nullptr, *s_otaLbl = nullptr;
+static uint32_t s_otaSeq = 0;
+static void otaUi() {
+  uint8_t st = g_ota.state;
+  bool busy = st == OTA_DOWNLOADING || st == OTA_REBOOTING;
+  if (busy && !s_otaBox) {
+    s_otaBox = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_otaBox, 320, 240);
+    lv_obj_set_pos(s_otaBox, 0, 0);
+    lv_obj_set_style_bg_color(s_otaBox, col(C_BG), 0);
+    lv_obj_set_style_bg_opa(s_otaBox, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_otaBox, 0, 0);
+    lv_obj_set_style_radius(s_otaBox, 0, 0);
+    lv_obj_clear_flag(s_otaBox, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* ic = mkLabel(s_otaBox, LV_SYMBOL_DOWNLOAD, &lv_font_montserrat_26, C_ACCENT);
+    lv_obj_align(ic, LV_ALIGN_CENTER, 0, -62);
+    String t = String("Оновлення прошивки\nv") + FW_VERSION + " → v" + g_ota.remote;
+    lv_obj_t* h = mkLabel(s_otaBox, t.c_str(), &font_ua_18, C_TEXT);
+    lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, -20);
+    s_otaBar = lv_bar_create(s_otaBox);
+    lv_obj_set_size(s_otaBar, 240, 14);
+    lv_obj_align(s_otaBar, LV_ALIGN_CENTER, 0, 22);
+    lv_obj_set_style_bg_color(s_otaBar, col(C_PANEL2), 0);
+    lv_obj_set_style_bg_color(s_otaBar, col(C_ACCENT), LV_PART_INDICATOR);
+    lv_bar_set_range(s_otaBar, 0, 100);
+    s_otaLbl = mkLabel(s_otaBox, "0%", &font_ua_14, C_MUTED);
+    lv_obj_align(s_otaLbl, LV_ALIGN_CENTER, 0, 48);
+    lv_obj_t* n = mkLabel(s_otaBox, "Не вимикайте живлення", &font_ua_12, C_MUTED);
+    lv_obj_align(n, LV_ALIGN_BOTTOM_MID, 0, -14);
+  }
+  if (s_otaBox) {
+    if (!busy) { lv_obj_del(s_otaBox); s_otaBox = s_otaBar = s_otaLbl = nullptr; }
+    else {
+      lv_bar_set_value(s_otaBar, g_ota.pct, LV_ANIM_OFF);
+      char b[48];
+      if (st == OTA_REBOOTING) snprintf(b, sizeof(b), "Готово · перезапуск…");
+      else snprintf(b, sizeof(b), "%u%%", (unsigned)g_ota.pct);
+      lv_label_set_text(s_otaLbl, b);
+    }
+  }
+  uint32_t seq = g_ota.msgSeq;
+  if (seq != s_otaSeq) {
+    s_otaSeq = seq;
+    if (!busy && g_ota.msg[0]) toast(g_ota.msg);
+  }
+}
+
 void uiLoop() {
   uint32_t now = millis();
   if (now - s_lastUi < 250) return;
   s_lastUi = now;
+  otaUi();
 
   // якщо Wi-Fi відвалився вже після налаштування — просто чекаємо автоперепідключення
   stateLock();

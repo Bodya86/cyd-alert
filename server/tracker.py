@@ -233,14 +233,15 @@ class Track:
         self.nobs = 1
         vm, vs = self.cfg["v"]
         self.p = []
-        # курс невідомий: 60% частинок — з історичного поля маршрутів (якщо модель є й комірка має дані), решта рівномірно
+        # курс невідомий: prior_mix (типово 60%, data/model_params.json) частинок — з історичного поля маршрутів (якщо модель є й комірка має дані), решта рівномірно
         pf = prior.dir_prob(lat, lon) if prior is not None and typ in DRONE_TYPES and not (heading is not None and kappa > 0) else None
         self.prior_used = pf is not None
+        n_prior = int(round(20 * getattr(prior, "prior_mix", 0.6))) if pf else 0
         for k in range(N):
             x, y = rnd.gauss(0, sigma), rnd.gauss(0, sigma)
             if heading is not None and kappa > 0:
                 h = rnd.vonmisesvariate(heading, kappa)
-            elif pf and k % 5 < 3:
+            elif pf and k % 20 < n_prior:
                 h = prior.sample_heading(lat, lon, rnd, pf)
             else:
                 h = rnd.uniform(0, TWO_PI)

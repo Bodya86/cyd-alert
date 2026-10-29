@@ -1,0 +1,11 @@
+{
+ "_comment": "Сповіщення в Telegram з live.yml (секрети TG_BOT_TOKEN і TG_CHAT_ID; без них нічого не надсилається). city/district — id з data/locations.json (district: null — усе місто; напр. \"molod\" — Молодіжний: тоді червоний рівень рахується саме для району).",
+ "city": "kremenchuk",
+ "district": null,
+ "label": "Кременчук, Кременчуцький р-н",
+ "min_level": "orange",
+ "photo": true,
+ "debounce_min": 10,
+ "clear_after_min": 3,
+ "send_clear": true
+}

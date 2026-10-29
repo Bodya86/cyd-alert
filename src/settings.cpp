@@ -32,6 +32,7 @@ void settingsLoad() {
   g_set.alertOnYellow = p.getBool("onyellow", true);
   g_set.autoZoom = p.getBool("autozoom", true);
   g_set.showRoutes = p.getBool("routes", false);
+  g_set.autoUpdate = p.getBool("autoupd", true);
   g_set.outMode = p.getUChar("outmode", OUT_MODE_AUTO);
   g_set.outGroup = p.getChar("outgroup", -1);
   g_set.outProv = p.getChar("outprov", -1);
@@ -67,6 +68,7 @@ void settingsSave() {
   p.putBool("onyellow", g_set.alertOnYellow);
   p.putBool("autozoom", g_set.autoZoom);
   p.putBool("routes", g_set.showRoutes);
+  p.putBool("autoupd", g_set.autoUpdate);
   p.putUChar("outmode", g_set.outMode);
   p.putChar("outgroup", g_set.outGroup);
   p.putChar("outprov", g_set.outProv);

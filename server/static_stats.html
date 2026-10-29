@@ -1,0 +1,53 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">
+<title>CYD Alert · точність прогнозів</title><style>
+body{background:#0d1117;color:#e6edf3;font:15px system-ui;margin:auto;padding:20px;max-width:820px}
+.card{background:#161b22;border-radius:14px;padding:16px;margin:12px 0}.mut{color:#8b949e;font-size:13px}
+h1{font-size:22px}h2{font-size:17px;margin:0 0 8px}table{border-collapse:collapse;width:100%}td,th{padding:5px 8px;text-align:right;border-bottom:1px solid #21262d}
+th:first-child,td:first-child{text-align:left}.ok{color:#3fb950}.bad{color:#ff7b72}a{color:#58a6ff}svg{width:100%;height:auto;display:block}
+.lg span{display:inline-block;margin-right:14px}.lg i{display:inline-block;width:12px;height:4px;margin-right:5px;vertical-align:middle}
+</style>
+<h1>📈 Точність прогнозів <span class=mut><a href="./">← до дашборда</a></span></h1>
+<div class=card id=live><span class=mut>завантаження…</span></div>
+<div class=card id=daily></div>
+<div class=card id=bt></div>
+<div class=card id=cal></div>
+<script>
+const CAL=%CALIB%, BT=%BACKTEST%, PRM=%PARAMS%;
+const GH=location.hostname.match(/^([^.]+)\.github\.io$/),REPO=location.pathname.split('/')[1];
+const RAW=GH&&REPO?`https://raw.githubusercontent.com/${GH[1]}/${REPO}/data/`:null;
+const J=async u=>{for(const b of (RAW?[RAW,'']:[''])){try{const r=await fetch(b+u+'?t='+Date.now());if(r.ok)return r.json()}catch(e){}}return null};
+const P=v=>v==null?'—':Math.round(v*100)+'%';
+const t=s=>s?new Date(s*1000).toLocaleString('uk',{dateStyle:'short',timeStyle:'short'}):'—';
+const C={dir1:'#58a6ff',dir3:'#1f6feb',tgt1:'#ff8c1a',tgt3:'#f2c94c'};
+function bars(rows,keys,names){const W=760,H=180,gw=W/rows.length,bw=Math.min(28,(gw-20)/keys.length);let s=`<svg viewBox="0 0 ${W} ${H+34}">`;
+ for(let y=0;y<=4;y++){const yy=10+H-H*y/4;s+=`<line x1=0 x2=${W} y1=${yy} y2=${yy} stroke=#21262d /><text x=2 y=${yy-2} fill=#8b949e font-size=10>${y*25}%</text>`}
+ rows.forEach((r,i)=>{keys.forEach((k,j)=>{const v=r[k];if(v==null)return;const h=H*v,x=i*gw+20+j*(bw+3);
+  s+=`<rect x=${x} y=${10+H-h} width=${bw} height=${h} fill=${C[k]} rx=3 /><text x=${x+bw/2} y=${6+H-h} fill=#e6edf3 font-size=10 text-anchor=middle>${Math.round(v*100)}</text>`});
+  s+=`<text x=${i*gw+gw/2} y=${H+28} fill=#8b949e font-size=12 text-anchor=middle>${names[i]}</text>`});return s+'</svg>'}
+function lines(rows,keys,base){const W=760,H=170;if(rows.length<2)return '<p class=mut>Замало днів для графіка — накопичується.</p>';
+ let s=`<svg viewBox="0 0 ${W} ${H+30}">`;const x=i=>30+i*(W-40)/(rows.length-1),y=v=>10+H-H*v;
+ for(let g=0;g<=4;g++)s+=`<line x1=30 x2=${W} y1=${y(g/4)} y2=${y(g/4)} stroke=#21262d /><text x=0 y=${y(g/4)+3} fill=#8b949e font-size=10>${g*25}%</text>`;
+ if(base)s+=`<line x1=30 x2=${W} y1=${y(base)} y2=${y(base)} stroke=#8b949e stroke-dasharray="5 5" />`;
+ keys.forEach(k=>{const pts=rows.map((r,i)=>r[k]==null?null:[x(i),y(r[k])]).filter(Boolean);if(pts.length)s+=`<polyline fill=none stroke=${C[k]} stroke-width=2.5 points="${pts.map(p=>p.join(',')).join(' ')}"/>`+pts.map(p=>`<circle cx=${p[0]} cy=${p[1]} r=3 fill=${C[k]} />`).join('')});
+ rows.forEach((r,i)=>{if(i%Math.ceil(rows.length/8)==0)s+=`<text x=${x(i)} y=${H+26} fill=#8b949e font-size=11 text-anchor=middle>${r.day.slice(5)}</text>`});return s+'</svg>'}
+const LG=`<div class="lg mut"><span><i style="background:${C.dir1}"></i>напрям top-1</span><span><i style="background:${C.dir3}"></i>напрям top-3</span><span><i style="background:${C.tgt1}"></i>ціль top-1</span><span><i style="background:${C.tgt3}"></i>ціль top-3</span></div>`;
+(async()=>{const S=await J('acc/summary.json');const el=document.getElementById('live');
+ if(!S){el.innerHTML='<h2>Живі прогнози</h2><p class=mut>Ще немає даних: журнал веде live.yml (гілка data, acc/summary.json).</p>';return}
+ const R=S.rolling,ks=['24h','7d','30d'];
+ el.innerHTML=`<h2>Живі прогнози трекера</h2>${bars(ks.map(k=>R[k]),['dir1','dir3','tgt1','tgt3'],['24 год','7 днів','30 днів'])}${LG}
+ <table><tr><th>Вікно</th><th>прогнозів</th><th>напрям: n</th><th>top-1</th><th>top-3</th><th>ціль: n</th><th>top-1</th><th>top-3</th></tr>
+ ${ks.map(k=>`<tr><td>${k}</td><td>${R[k].n}</td><td>${R[k].n_dir}</td><td>${P(R[k].dir1)}</td><td>${P(R[k].dir3)}</td><td>${R[k].n_tgt}</td><td>${P(R[k].tgt1)}</td><td>${P(R[k].tgt3)}</td></tr>`).join('')}</table>
+ <p class=mut>Випадкове вгадування напрямку (8 секторів): top-1 ${P(S.baseline.dir1)}, top-3 ${P(S.baseline.dir3)}. Курс відомий / невідомий: top-1 ${P(S.by_conf.course_known.dir1)} (n=${S.by_conf.course_known.n_dir}) / ${P(S.by_conf.course_unknown.dir1)} (n=${S.by_conf.course_unknown.n_dir}).
+ Напрям перевіряється першим наступним спостереженням тієї самої цілі (≥12 км, ≤60 хв); ціль — місто ≤25 км від останнього положення, коли ціль зникла. Очікують перевірки: ${S.pending}. Оновлено ${t(S.generated)}.</p>`;
+ document.getElementById('daily').innerHTML=`<h2>По днях (влучання прогнозу)</h2>${lines(S.daily,['dir1','tgt1','tgt3'],S.baseline.dir1)}${LG}<p class=mut>Пунктир — випадкове вгадування напрямку (12.5%).</p>`})();
+(()=>{const b=BT&&BT.backtest;const el=document.getElementById('bt');if(!b){el.innerHTML='<h2>Бектест історичної моделі</h2><p class=mut>немає data/history_model.json</p>';return}
+ const e=b.next_dir.explicit_heading||{},tg=b.target||{};
+ el.innerHTML=`<h2>Бектест історичної моделі (відкладені хвилі)</h2>
+ ${bars([{dir1:(e.uniform||{}).top1,tgt1:(tg.distance_only||{}).top1,tgt3:(tg.distance_only||{}).top3},{dir1:(e.field||{}).top1,tgt1:(tg.history_prior||{}).top1,tgt3:(tg.history_prior||{}).top3}],['dir1','tgt1','tgt3'],['без моделі (рівномірно / лише відстань)','історична модель'])}${LG}
+ <p class=mut>Наступний напрям при явному «курсом на» (n=${e.n||0}), ціль атаки (n=${tg.n||0}). Модель побудована ${t(BT.built)} з ${BT.stats?BT.stats.posts:'?'} постів, ${BT.stats?BT.stats.waves:'?'} хвиль.
+ Параметри: P(ціль) base=${b.params?b.params.base:'?'}, γ=${b.params?b.params.gamma:'?'}, λ=${b.params?b.params.lam:'?'} км; trk_w=${PRM.trk_w}, prior_mix=${PRM.prior_mix}.</p>`})();
+(()=>{const el=document.getElementById('cal');if(!CAL.length){el.innerHTML='<h2>Щотижнева перекалібровка</h2><p class=mut>Ще не запускалась (history.yml, понеділок).</p>';return}
+ el.innerHTML=`<h2>Щотижнева перекалібровка ваг</h2><table><tr><th>Дата</th><th>поточні</th><th>запропоновані</th><th>holdout LL поточн.</th><th>holdout LL нові</th><th>рішення</th></tr>
+ ${CAL.slice().reverse().map(c=>`<tr><td>${t(c.ts)}</td><td>trk_w ${c.current.trk_w}, mix ${c.current.prior_mix}</td><td>trk_w ${c.proposed.trk_w}, mix ${c.proposed.prior_mix}</td><td>${c.holdout.current.ll}</td><td>${c.holdout.proposed.ll}</td><td class=${c.accepted?'ok':'bad'}>${c.accepted?'прийнято':'відхилено'}</td></tr>`).join('')}</table>
+ <p class=mut>Пошук по сітці на останніх 60 хвилях: перша половина — вибір, друга — перевірка (holdout). Нові ваги приймаються, лише якщо на holdout краще (лог-правдоподібність наступного кроку, рівномірний = ${CAL[CAL.length-1].holdout.uniform.ll}).</p>`})();
+</script>

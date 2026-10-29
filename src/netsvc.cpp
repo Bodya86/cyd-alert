@@ -3,6 +3,8 @@
 #include "app.h"
 #include "analyzer.h"
 #include "tgscrape.h"
+#include "ota.h"
+#include "version.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -35,7 +37,7 @@ struct Req {
     http.setTimeout(12000);
     http.useHTTP10(true);   // без chunked — можна читати потік
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setUserAgent("CYD-Alert/1.1 (ESP32)");
+    http.setUserAgent("CYD-Alert/" FW_VERSION " (ESP32)");
     if (bearer && bearer[0]) http.addHeader("Authorization", String("Bearer ") + bearer);
     if (lastMod && lastMod->length()) http.addHeader("If-Modified-Since", *lastMod);
     if (accept) http.addHeader("Accept", accept);
@@ -817,6 +819,7 @@ static void netTask(void*) {
       outageManualOrOff();
     }
     first = false;
+    otaTick();   // раз на 6 год (і через 90 с після старту); не під час помаранчевого/червоного рівня
   }
 }
 

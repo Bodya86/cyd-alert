@@ -19,6 +19,8 @@ import build_static as bs     # noqa: E402
 import server as srv          # noqa: E402
 import tracker as tk          # noqa: E402
 import jaam_ws                # noqa: E402
+import tg_notify              # noqa: E402
+import accuracy               # noqa: E402
 
 log = bs.log
 
@@ -103,6 +105,9 @@ def main():
         t0 = time.time()
         while time.time() - t0 < 20 and not srv.jaam.snapshot()[2]:
             time.sleep(0.5)
+    notifier = tg_notify.Notifier(out)
+    log("telegram-сповіщення: " + ("увімкнено" if notifier.enabled else "вимкнено (немає секретів TG_BOT_TOKEN/TG_CHAT_ID)"))
+    acc = accuracy.AccuracyLog(out)
     pub = Publisher(out, a.branch) if a.push else None
     chans = bs.all_channels()
     last_out, it = 0.0, 0
@@ -124,6 +129,17 @@ def main():
             bs.write_outputs(out, state_path, chans, do_outage=do_out, next_in=int(a.interval))
             if do_out:
                 last_out = time.time()
+            try:
+                notifier.tick()
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            try:
+                if acc.tick(srv.trk):
+                    acc.summarize(force=True)
+                acc.save()
+                acc.summarize()
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
             pushed = pub.publish() if pub else False
             log(f"#{it}: {src}, записано {bs._written['n']}, без змін {bs._written['skipped']}, "
                 f"цілей {len(srv.trk.tracks)}, push {'так' if pushed else 'ні'}, {time.time() - t0:.1f} с")

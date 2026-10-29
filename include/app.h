@@ -32,6 +32,7 @@ struct Settings {
   bool alertOnYellow = true;   // звуковий сигнал на жовтому рівні (дрони в області)
   bool autoZoom = true;        // мапа сама наближається до області / району, коли ціль поруч
   bool showRoutes = false;     // шар «типові маршрути» (історична модель) на зумі області
+  bool autoUpdate = true;      // OTA: самостійно встановлювати нові релізи (не під час загрози)
   // графік відключень світла
   uint8_t outMode = OUT_MODE_AUTO;   // OUT_MODE_OFF / AUTO / MANUAL
   int8_t outGroup = -1;              // індекс у OUTAGE_GROUPS ("1.1".."6.2"), -1 — не обрано
