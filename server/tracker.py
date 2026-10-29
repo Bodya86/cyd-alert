@@ -546,6 +546,7 @@ class Tracker:
                 best = None
             else:
                 tr.last_obs = ts; tr.nobs += 1; tr.src.add(src); tr.count = max(tr.count, cues["count"])
+                tr.last_pos = [int(ts), round(p["lat"], 4), round(p["lon"], 4), round(sigma, 1)]
                 touched.append(("update", tr.id))
         if best is None or bm <= 0.08:
             head, kappa = None, 0.0
@@ -555,6 +556,7 @@ class Tracker:
                 head, kappa = bearing_xy(ox, oy, 0, 0), 2.0
             tr = Track(typ, p["lat"], p["lon"], sigma, ts, random.Random(self.rnd.random()), head, kappa, cues["count"], src,
                        prior=None if cues["heading"] else self.history)
+            tr.last_pos = [int(ts), round(p["lat"], 4), round(p["lon"], 4), round(sigma, 1)]
             self.tracks.append(tr)
             touched.append(("new", tr.id))
         for h in cues["heading"]:

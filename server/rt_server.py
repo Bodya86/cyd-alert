@@ -26,6 +26,7 @@ import outage                 # noqa: E402
 import jaam_ws                # noqa: E402
 import tg_notify              # noqa: E402
 import accuracy               # noqa: E402
+import outcomes               # noqa: E402
 from live import NewsLoop     # noqa: E402
 import fastforecast           # noqa: E402
 FAST_NP = fastforecast.install()
@@ -239,6 +240,12 @@ class Engine(threading.Thread):
         STATS["notify"] = notifier.enabled
         log("telegram-сповіщення: " + ("увімкнено" if notifier.enabled else "вимкнено (немає TG_BOT_TOKEN/TG_CHAT_ID у /etc/cyd-alert/env)"))
         acc = accuracy.AccuracyLog(out)
+        # журнал прогнозів «проліт ≤ R за 30 хв» + фактичних результатів (поза public/, не віддається по HTTP)
+        oc_city = tg_notify.load_cfg().get("city") or bs.DEFAULT_CITY
+        oc_dir = os.environ.get("OUTCOME_DIR") or os.path.join(os.path.dirname(os.path.abspath(out)), "outcomes")
+        oc_log = outcomes.OutcomeLog(oc_dir, R=srv.RADIUS_KM)
+        oc_rot = 0.0
+        log(f"журнал прогнозів: {oc_dir} (місто {oc_city})")
         chans = bs.all_channels()
         fast = {c["channel"].lower() for c in an.LOC["cities"] if c.get("channel")}
         fast |= {x.strip().lower() for x in os.environ.get("TG_FAST", "").split(",") if x.strip()}
@@ -301,6 +308,21 @@ class Engine(threading.Thread):
                         acc.summarize(force=True)
                     acc.save()
                     acc.summarize()
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                try:
+                    ulat, ulon, _ = srv.user_point({"city": oc_city})
+                    reg = srv.CITY_REGIONS.get(oc_city)
+                    rs = srv.alerts.get("regions") or ""
+                    ual = (rs[reg] != ".") if reg is not None and 0 <= reg < len(rs) else None
+                    tg = srv.assess({"city": oc_city})[0] if oc_log.due() else None
+                    with srv.trk_lock:
+                        oc_log.tick(srv.trk, ulat, ulon, alert=ual, assess=(lambda: tg) if tg is not None else None,
+                                    summary=tk.threat_summary)
+                    oc_log.save()
+                    if time.time() - oc_rot > 3600:
+                        oc_rot = time.time()
+                        oc_log.rotate()
                 except Exception:  # noqa: BLE001
                     traceback.print_exc()
             except Exception:  # noqa: BLE001
