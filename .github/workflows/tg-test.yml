@@ -1,0 +1,24 @@
+# Перевірка секретів Telegram: Actions → tg-test → Run workflow. Надсилає одне тестове повідомлення з мапою.
+name: tg-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install Pillow
+      - name: Send test message
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python server/tg_test.py
