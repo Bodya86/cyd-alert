@@ -13,3 +13,6 @@ test/host/cases_gen.h
 data/history/raw/
 dist/
 data/history/news_raw/
+
+# HD sim tooling deps
+tools/sim/hd/node_modules/

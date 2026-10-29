@@ -1,17 +1,26 @@
 // CYD Alert UI simulator: compiles the REAL src/ui.cpp (included below, unchanged) against LVGL 8.3 on the host,
-// renders into a 320x240 RGB565 framebuffer and dumps PPM screenshots of scripted scenes.
+// renders into a 320x240 framebuffer and dumps PPM screenshots of scripted scenes.
+// HD build (hd/build_hd.sh): SIM_K>1 — той самий UI, перераховані координати/шрифти/мапа ×K (див. hd/README).
 // Usage: build/cyd_sim <out_dir>
+#ifndef SIM_K
+#define SIM_K 1
+#endif
+#ifdef SIM_UI_FILE
+#include SIM_UI_FILE
+#else
 #include "../../src/ui.cpp"
+#endif
 #include <string>
 
 extern "C" { extern uint32_t g_sim_ms; extern time_t g_sim_epoch; }
 extern int g_sim_bat_mv;
 
-static uint16_t s_fb[320 * 240];
-static lv_color_t s_buf[320 * 240];
+static const int FB_W = 320 * SIM_K, FB_H = 240 * SIM_K;
+static uint32_t* s_fb;
+static lv_color_t* s_buf;
 static void flushCb(lv_disp_drv_t* d, const lv_area_t* a, lv_color_t* px) {
   for (int y = a->y1; y <= a->y2; y++)
-    for (int x = a->x1; x <= a->x2; x++) s_fb[y * 320 + x] = (px++)->full;
+    for (int x = a->x1; x <= a->x2; x++) s_fb[y * FB_W + x] = lv_color_to32(*px++);
   lv_disp_flush_ready(d);
 }
 static void run(uint32_t ms) {
@@ -23,11 +32,10 @@ static void shot(const char* name) {
   lv_refr_now(nullptr);
   std::string p = s_outDir + "/" + name + ".ppm";
   FILE* f = fopen(p.c_str(), "wb");
-  fprintf(f, "P6\n320 240\n255\n");
-  for (int i = 0; i < 320 * 240; i++) {
-    uint16_t c = s_fb[i];
-    uint8_t r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
-    uint8_t rgb[3] = {(uint8_t)((r * 527 + 23) >> 6), (uint8_t)((g * 259 + 33) >> 6), (uint8_t)((b * 527 + 23) >> 6)};
+  fprintf(f, "P6\n%d %d\n255\n", FB_W, FB_H);
+  for (int i = 0; i < FB_W * FB_H; i++) {
+    uint32_t c = s_fb[i];
+    uint8_t rgb[3] = {(uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c};
     fwrite(rgb, 1, 3, f);
   }
   fclose(f);
@@ -139,10 +147,12 @@ int main(int argc, char** argv) {
 
   lv_init();
   static lv_disp_draw_buf_t db;
-  lv_disp_draw_buf_init(&db, s_buf, nullptr, 320 * 240);
+  s_fb = (uint32_t*)calloc((size_t)FB_W * FB_H, 4);
+  s_buf = (lv_color_t*)calloc((size_t)FB_W * FB_H, sizeof(lv_color_t));
+  lv_disp_draw_buf_init(&db, s_buf, nullptr, FB_W * FB_H);
   static lv_disp_drv_t dd;
   lv_disp_drv_init(&dd);
-  dd.hor_res = 320; dd.ver_res = 240; dd.flush_cb = flushCb; dd.draw_buf = &db;
+  dd.hor_res = FB_W; dd.ver_res = FB_H; dd.flush_cb = flushCb; dd.draw_buf = &db;
   lv_disp_drv_register(&dd);
 
   // налаштування користувача (як на його платі): Кременчук, Полтавська обл., черга 3.1
@@ -234,7 +244,7 @@ int main(int argc, char** argv) {
       lv_obj_t* l = lv_obj_get_child(r, 0);
       if (l && lv_obj_check_type(l, &lv_label_class) && strstr(lv_label_get_text(l), "АКБ")) {
         lv_obj_scroll_to_view(r, LV_ANIM_OFF);
-        lv_obj_scroll_by(list, 0, -94, LV_ANIM_OFF);
+        lv_obj_scroll_by(list, 0, -94 * SIM_K, LV_ANIM_OFF);
       }
     }
     run(400); shot("11_settings_battery");
