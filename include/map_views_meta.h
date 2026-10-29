@@ -8,7 +8,8 @@
 // kind: 0 — місто (з locations.json), 1 — райцентр, 2 — село/смт; (x,y) — точка, (lx,ly) — лівий верх підпису
 struct MapLabel { int16_t x, y, lx, ly; uint8_t kind; const char* name; };
 struct MapView { float minx, miny, scale, offx, offy; const uint16_t* rowOfs; const uint8_t* runs;
-                 const MapLabel* labels; uint8_t nlabels; };
+                 const MapLabel* labels; uint8_t nlabels;
+                 int16_t ex, ey, rw, rh; };   // растр rw×rh; кадр MAP_W×MAP_H починається з (ex, ey) растру
 struct MapCityView { const char* city; uint8_t view; };
 extern const MapView MAP_VIEWS[MAP_VIEW_COUNT];
 extern const int8_t MAP_OBL_VIEW[27];

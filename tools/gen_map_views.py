@@ -45,6 +45,18 @@ class View:
         self.scale = min((W - 2 * pad) / (x1 - x0), (H - 2 * pad) / (y1 - y0))
         self.offx = (W - (x1 - x0) * self.scale) / 2
         self.offy = (H - (y1 - y0) * self.scale) / 2
+        self.ex = self.ey = 0; self.w, self.h = W, H     # растр може бути більшим за кадр (див. extend)
+
+    def extend(self, pts):
+        """Розширює растр так, щоб кадр W×H можна було зсунути й поставити кожну з точок pts (кадрові координати)
+        у центр видимої мапи. ex/ey — скільки растру ліворуч/згори від кадру."""
+        l = t = r = b = 0
+        for x, y in pts:
+            dx, dy = x - W / 2, y - H / 2
+            l = max(l, math.ceil(-dx) + 1); r = max(r, math.ceil(dx) + 1)
+            t = max(t, math.ceil(-dy) + 1); b = max(b, math.ceil(dy) + 1)
+        self.ex, self.ey, self.w, self.h = l, t, W + l + r, H + t + b
+        self.offx += l; self.offy += t
 
     def px(self, lon, lat, ss=1):
         x, y = proj(lon, lat)
@@ -55,6 +67,7 @@ class View:
 
 
 def render(v, level):
+    W, H = v.w, v.h
     img = Image.new("L", (W * SS, H * SS), BG); d = ImageDraw.Draw(img)
     for i in sorted(range(N), key=lambda i: i in cityIdx):
         for r in rings(feats[i]):
@@ -142,15 +155,15 @@ PLACES = gaz_places()
 
 
 class Labeler:
-    def __init__(self):
-        self.boxes = []; self.out = []
+    def __init__(self, w=W, h=H):
+        self.boxes = []; self.out = []; self.w, self.h = w, h
 
     def add(self, x, y, name, kind, tw=None):
         tw = tw or int(FONT.getlength(name)) + 2
         if any(abs(x - q[0]) < 8 and abs(y - q[1]) < 8 for q in self.out): return False   # та сама точка (Полтава/«Полтав»)
         for (lx, ly) in ((x + 4, y - 7), (x - 4 - tw, y - 7), (x - tw // 2, y + 3), (x - tw // 2, y - 17)):
             b = (lx, ly, lx + tw, ly + 13)
-            if b[0] < 0 or b[1] < 0 or b[2] > W or b[3] > H: continue
+            if b[0] < 0 or b[1] < 0 or b[2] > self.w or b[3] > self.h: continue
             if any(not (b[2] < c[0] or b[0] > c[2] or b[3] < c[1] or b[1] > c[3]) for c in self.boxes): continue
             self.boxes.append(b); self.out.append((int(x), int(y), int(lx), int(ly), kind, name)); return True
         return False
@@ -170,13 +183,13 @@ def area_view(lat, lon):
 
 
 def labels_for(v, level, o, city=None):
-    L = Labeler()
+    L = Labeler(v.w, v.h)
     if city:   # місце користувача резервуємо заздалегідь
         x, y = v.px(city["lon"], city["lat"]); L.add(x, y, city["name"], 0)
     cs = sorted(loc["cities"], key=lambda c: (c["oblast"] != o, c["id"] != (city or {}).get("id")))
     for c in cs:
         x, y = v.px(c["lon"], c["lat"])
-        if 0 <= x < W and 0 <= y < H and not (city and c["id"] == city["id"]):
+        if 0 <= x < v.w and 0 <= y < v.h and not (city and c["id"] == city["id"]):
             L.add(x, y, c["name"], 0)
     if level == 1:   # райцентри: населений пункт, з назви якого «виростає» назва району
         for i in range(N):
@@ -190,16 +203,17 @@ def labels_for(v, level, o, city=None):
                     best = (n, la, lo); break
             if best:
                 x, y = v.px(best[2], best[1])
-                if 0 <= x < W and 0 <= y < H: L.add(x, y, best[0], 1)
+                if 0 <= x < v.w and 0 <= y < v.h: L.add(x, y, best[0], 1)
     else:
         for n, la, lo in sorted(PLACES, key=lambda p: (p[1] - city["lat"]) ** 2 + ((p[2] - city["lon"]) * 0.66) ** 2):
             x, y = v.px(lo, la)
-            if 2 <= x < W - 2 and 2 <= y < H - 2 and not any(abs(x - q[0]) < 3 and abs(y - q[1]) < 3 for q in L.out):
+            if 2 <= x < v.w - 2 and 2 <= y < v.h - 2 and not any(abs(x - q[0]) < 3 and abs(y - q[1]) < 3 for q in L.out):
                 L.add(x, y, n, 2)
-    return L.out
+    return [(x - v.ex, y - v.ey, lx - v.ex, ly - v.ey, k, n) for x, y, lx, ly, k, n in L.out]   # у кадрових координатах
 
 
 def rle(px):
+    H, W = px.shape
     runs, ofs = [], []
     for y in range(H):
         ofs.append(len(runs)); x = 0
@@ -220,6 +234,10 @@ obl_view = [-1] * 27
 for o in range(27):
     if o in (KYIV, SEVAS): continue
     v = oblast_view(o)
+    # точка користувача має стояти в центрі видимої мапи і на рівні «область»: растр області розширено так,
+    # щоб кадр можна було зсунути на кожне місто цієї області (Київ → Київщина, Севастополь → Крим)
+    home = [c for c in loc["cities"] if {KYIV: 10, SEVAS: 0}.get(c["oblast"], c["oblast"]) == o]
+    v.extend([v.px(c["lon"], c["lat"]) for c in home])
     views.append(("obl%d" % o, v, render(v, 1), labels_for(v, 1, o)))
     obl_view[o] = len(views) - 1
 obl_view[KYIV] = obl_view[10]; obl_view[SEVAS] = obl_view[0]
@@ -242,7 +260,8 @@ with open(os.path.join(ROOT, "include", "map_views.h"), "w", encoding="utf-8") a
                 (",".join(f'{{{x},{y},{lx},{ly},{kd},"{esc(n)}"}}' for x, y, lx, ly, kd, n in labs) or "{0,0,0,0,0,\"\"}") + "};\n")
     f.write(f"const MapView MAP_VIEWS[{len(views)}] = {{\n")
     for k, (name, v, px, labs) in enumerate(views):
-        f.write(f"  {{{v.minx:.6f}f, {v.miny:.6f}f, {v.scale:.4f}f, {v.offx:.3f}f, {v.offy:.3f}f, VO{k}, VR{k}, VL{k}, {len(labs)}}},  // {name}\n")
+        f.write(f"  {{{v.minx:.6f}f, {v.miny:.6f}f, {v.scale:.4f}f, {v.offx - v.ex:.3f}f, {v.offy - v.ey:.3f}f, VO{k}, VR{k}, VL{k}, {len(labs)}, "
+                f"{v.ex}, {v.ey}, {v.w}, {v.h}}},  // {name}\n")
     f.write("};\n")
     f.write("const int8_t MAP_OBL_VIEW[27] = {" + ",".join(map(str, obl_view)) + "};\n")
     f.write(f"const MapCityView MAP_CITY_VIEWS[{len(city_view)}] = {{" + ",".join(f'{{"{c}",{k}}}' for c, k in city_view) + "};\n")
@@ -252,7 +271,8 @@ with open(os.path.join(ROOT, "include", "map_views_meta.h"), "w", encoding="utf-
     f.write("// kind: 0 — місто (з locations.json), 1 — райцентр, 2 — село/смт; (x,y) — точка, (lx,ly) — лівий верх підпису\n")
     f.write("struct MapLabel { int16_t x, y, lx, ly; uint8_t kind; const char* name; };\n")
     f.write("struct MapView { float minx, miny, scale, offx, offy; const uint16_t* rowOfs; const uint8_t* runs;\n"
-            "                 const MapLabel* labels; uint8_t nlabels; };\n")
+            "                 const MapLabel* labels; uint8_t nlabels;\n"
+            "                 int16_t ex, ey, rw, rh; };   // растр rw×rh; кадр MAP_W×MAP_H починається з (ex, ey) растру\n")
     f.write("struct MapCityView { const char* city; uint8_t view; };\n")
     f.write("extern const MapView MAP_VIEWS[MAP_VIEW_COUNT];\nextern const int8_t MAP_OBL_VIEW[27];\n"
             "extern const MapCityView MAP_CITY_VIEWS[MAP_CITY_VIEW_COUNT];\n")
@@ -264,16 +284,18 @@ for name in ("obl16", "c_kremenchuk"):
     k = [i for i, vv in enumerate(views) if vv[0] == name][0]
     _, v, px, labs = views[k]
     o16 = 16
-    im = Image.new("RGB", (W, H)); pp = im.load()
-    for y in range(H):
-        for x in range(W):
+    ph, pw = px.shape
+    im = Image.new("RGB", (pw, ph)); pp = im.load()
+    for y in range(ph):
+        for x in range(pw):
             q = int(px[y, x])
             pp[x, y] = hexc(0x0B0F14 if q == BG else 0x5E6C7E if q == BORDER else 0x18202A if q == RBORDER else
                             0x1F4E79 if q == WATER else 0x2D6A9F if q == RIVER else
                             (0xE5484D if feats[q]["properties"]["name"] == "Кременчуцький" else 0x2C3B4E if obl[q] == o16 else 0x1E2733))
-    im = im.resize((W * 3, H * 3), Image.NEAREST); d = ImageDraw.Draw(im)
+    im = im.resize((pw * 3, ph * 3), Image.NEAREST); d = ImageDraw.Draw(im)
     F3 = ImageFont.truetype(os.path.join(HERE, "fonts", "Golos-500.ttf"), 36)
     for x, y, lx, ly, kd, n in labs:
+        x += v.ex; y += v.ey; lx += v.ex; ly += v.ey
         d.rectangle([x * 3 - 2, y * 3 - 2, x * 3 + 2, y * 3 + 2], fill=(230, 230, 230))
         d.text((lx * 3, ly * 3 - 3), n, fill=(230, 230, 230) if kd < 2 else (160, 170, 180), font=F3)
     im.save(os.path.join(ROOT, "docs", f"map_{name}.png"))

@@ -624,12 +624,16 @@ static const char* zoomName(int z) {
   return z == 0 ? "Україна" : "Область";
 }
 
+// vx/vy — координати в базовому кадрі виду; на екрані кадр зсунуто на panOf(), щоб ваша точка стояла
+// в центрі видимої мапи (між верхньою панеллю і карткою статусу). Растр області має запас для цього зсуву.
 static inline float vx(const MapView* v, float lon) { return (lon * MAP_PROJ_COSLAT - v->minx) * v->scale + v->offx; }
 static inline float vy(const MapView* v, float lat) { return (-lat - v->miny) * v->scale + v->offy; }
+static lv_point_t panOf(const MapView* v);
+static lv_point_t s_pan = {0, 0};          // зсув кадру поточного виду
 static inline lv_point_t mapPt(const lv_area_t& c, float lat, float lon) {
   lv_point_t p;
-  p.x = (lv_coord_t)(c.x1 + vx(s_view, lon));
-  p.y = (lv_coord_t)(c.y1 + vy(s_view, lat));
+  p.x = (lv_coord_t)(c.x1 + vx(s_view, lon) - s_pan.x);
+  p.y = (lv_coord_t)(c.y1 + vy(s_view, lat) - s_pan.y);
   return p;
 }
 static float kmBetween(float la1, float lo1, float la2, float lo2) {
@@ -648,6 +652,26 @@ static bool userPoint(float& lat, float& lon) {
     lon += 3.0f / (111.0f * cosf(lat * 0.0174533f)) * sinf(b);
   }
   return true;
+}
+// зсув кадру: місто користувача — у центр видимої мапи, у межах наявного растру (уся Україна — без зсуву)
+static lv_point_t panOf(const MapView* v) {
+  lv_point_t p = {0, 0};
+  const CityDef* c = userCity();
+  if (!v || !c || (v->rw <= MAP_W && v->rh <= MAP_H)) return p;
+  int dx = (int)lroundf(vx(v, c->lon) - MAP_W / 2.0f), dy = (int)lroundf(vy(v, c->lat) - MAP_H / 2.0f);
+  p.x = (lv_coord_t)LV_CLAMP(-v->ex, dx, v->rw - v->ex - MAP_W);
+  p.y = (lv_coord_t)LV_CLAMP(-v->ey, dy, v->rh - v->ey - MAP_H);
+  return p;
+}
+// підпис мапи, що потрапляє під мітку рівня зуму або кнопки «+ − ⌂», не малюємо (екранні координати)
+static bool labelHidden(const lv_area_t& a) {
+  lv_obj_t* const cover[4] = {s_zoomTag, s_btnZin, s_btnZout, s_btnZhome};
+  for (lv_obj_t* o : cover) {
+    if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) continue;
+    lv_area_t r, x; lv_obj_get_coords(o, &r);
+    if (_lv_area_intersect(&x, &a, &r)) return true;
+  }
+  return false;
 }
 
 static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c);
@@ -678,12 +702,18 @@ static void drawLabels(lv_draw_ctx_t* dc, const lv_area_t& c) {
   lv_draw_rect_dsc_t dd; lv_draw_rect_dsc_init(&dd);
   dd.bg_opa = LV_OPA_COVER; dd.radius = 0; dd.border_width = 0;
   static const uint32_t KC[3] = {0xE6EDF3, 0xC9D1D9, 0x8B98A5};
+  const int ox = c.x1 - s_pan.x, oy = c.y1 - s_pan.y;
   for (int i = 0; i < v->nlabels; i++) {
     const MapLabel& L = v->labels[i];
-    lv_area_t dot = {(lv_coord_t)(c.x1 + L.x - 1), (lv_coord_t)(c.y1 + L.y - 1), (lv_coord_t)(c.x1 + L.x + (L.kind < 2 ? 1 : 0)), (lv_coord_t)(c.y1 + L.y + (L.kind < 2 ? 1 : 0))};
+    if (L.kind >= 2 && s_uiLevel >= LVL_ORANGE) continue;   // під час загрози — без дрібних сіл, лише міста/райцентри
+    lv_area_t a = {(lv_coord_t)(ox + L.lx), (lv_coord_t)(oy + L.ly - 1), (lv_coord_t)(ox + L.lx + 110), (lv_coord_t)(oy + L.ly + 14)};
+    lv_area_t tb = a;
+    tb.x2 = (lv_coord_t)(tb.x1 + lv_txt_get_width(L.name, strlen(L.name), ld.font, 0, LV_TEXT_FLAG_NONE));
+    tb.y1 = (lv_coord_t)LV_MIN(tb.y1, oy + L.y - 1);
+    if (tb.x1 < c.x1 || tb.x2 > c.x2 || tb.y1 < c.y1 - 2 || tb.y1 + 14 > c.y2 || labelHidden(tb)) continue;   // не обрізаний краєм, не під міткою зуму / кнопками
+    lv_area_t dot = {(lv_coord_t)(ox + L.x - 1), (lv_coord_t)(oy + L.y - 1), (lv_coord_t)(ox + L.x + (L.kind < 2 ? 1 : 0)), (lv_coord_t)(oy + L.y + (L.kind < 2 ? 1 : 0))};
     dd.bg_color = col(KC[L.kind > 2 ? 2 : L.kind]);
     lv_draw_rect(dc, &dd, &dot);
-    lv_area_t a = {(lv_coord_t)(c.x1 + L.lx), (lv_coord_t)(c.y1 + L.ly - 1), (lv_coord_t)(c.x1 + L.lx + 110), (lv_coord_t)(c.y1 + L.ly + 14)};
     lv_area_t sh = a; sh.x1++; sh.x2++; sh.y1++; sh.y2++;
     ld.color = lv_color_black(); ld.opa = LV_OPA_70;
     lv_draw_label(dc, &ld, &sh, L.name, nullptr);
@@ -703,8 +733,10 @@ static void mapDrawCb(lv_event_t* e) {
   lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
   d.bg_opa = LV_OPA_COVER; d.radius = 0; d.border_width = 0;
   int y0 = LV_MAX(clip->y1, c.y1), y1 = LV_MIN(LV_MIN(clip->y2, c.y2), c.y1 + MAP_H - 1);
+  const int xs = s_view->ex + s_pan.x, ys = s_view->ey + s_pan.y;   // кадр у растрі
   for (int y = y0; y <= y1; y++) {
-    int row = y - c.y1, x = 0, runX = 0, runN = 0;
+    int row = y - c.y1 + ys, x = -xs, runX = 0, runN = 0;
+    if (row < 0 || row >= s_view->rh) continue;
     lv_color_t runC = s_pal[MAP_BG];
     auto flush = [&]() {
       if (!runN) return;
@@ -715,14 +747,19 @@ static void mapDrawCb(lv_event_t* e) {
     };
     for (int i = ROWS[row]; i < ROWS[row + 1]; i++) {
       uint8_t n = RUNS[i * 2], v = RUNS[i * 2 + 1];
+      int a0 = x, a1 = x + n;
+      x = a1;
+      if (a1 <= 0) continue;
+      if (a0 >= MAP_W) break;
+      if (a0 < 0) a0 = 0;
+      if (a1 > MAP_W) a1 = MAP_W;
       if (v == MAP_BG) { flush(); }
       else {
         lv_color_t cc = s_pal[v];
         if (runN && cc.full != runC.full) flush();
-        if (!runN) { runX = x; runC = cc; }
-        runN += n;
+        if (!runN) { runX = a0; runC = cc; }
+        runN = a1 - runX;
       }
-      x += n;
     }
     flush();
   }
@@ -883,7 +920,7 @@ static void placeMarker() {
   if (!s_marker) return;
   float la, lo;
   int mx, my;
-  if (userPoint(la, lo)) { mx = (int)vx(s_view, lo); my = (int)vy(s_view, la); }
+  if (userPoint(la, lo)) { mx = (int)lroundf(vx(s_view, lo)) - s_pan.x; my = (int)lroundf(vy(s_view, la)) - s_pan.y; }
   else if (g_set.oblast >= 0 && s_zoom == 0) { mx = MAP_CENTROID[g_set.oblast][0]; my = MAP_CENTROID[g_set.oblast][1]; }
   else { mx = MAP_W / 2; my = MAP_H / 2; }
   lv_obj_set_pos(s_marker, mx - 4, my - 4);
@@ -922,12 +959,13 @@ static void setZoom(int z, bool anim) {
   // межі нового виду в пікселях старого (або навпаки при віддаленні)
   const MapView* inner = z > s_zoom ? nv : ov;
   const MapView* outer = z > s_zoom ? ov : nv;
-  float lo1 = (inner->minx + (0 - inner->offx) / inner->scale) / MAP_PROJ_COSLAT, la1 = -(inner->miny + (0 - inner->offy) / inner->scale);
-  float lo2 = (inner->minx + (MAP_W - inner->offx) / inner->scale) / MAP_PROJ_COSLAT, la2 = -(inner->miny + (MAP_H - inner->offy) / inner->scale);
-  s_zoomFrom.x1 = (lv_coord_t)LV_CLAMP(0, (int)vx(outer, lo1), MAP_W - 4); s_zoomFrom.y1 = (lv_coord_t)LV_CLAMP(0, (int)vy(outer, la1), MAP_H - 4);
-  s_zoomFrom.x2 = (lv_coord_t)LV_CLAMP(s_zoomFrom.x1 + 3, (int)vx(outer, lo2), MAP_W - 1); s_zoomFrom.y2 = (lv_coord_t)LV_CLAMP(s_zoomFrom.y1 + 3, (int)vy(outer, la2), MAP_H - 1);
+  lv_point_t pi = panOf(inner), po = panOf(outer);
+  float lo1 = (inner->minx + (pi.x - inner->offx) / inner->scale) / MAP_PROJ_COSLAT, la1 = -(inner->miny + (pi.y - inner->offy) / inner->scale);
+  float lo2 = (inner->minx + (pi.x + MAP_W - inner->offx) / inner->scale) / MAP_PROJ_COSLAT, la2 = -(inner->miny + (pi.y + MAP_H - inner->offy) / inner->scale);
+  s_zoomFrom.x1 = (lv_coord_t)LV_CLAMP(0, (int)vx(outer, lo1) - po.x, MAP_W - 4); s_zoomFrom.y1 = (lv_coord_t)LV_CLAMP(0, (int)vy(outer, la1) - po.y, MAP_H - 4);
+  s_zoomFrom.x2 = (lv_coord_t)LV_CLAMP(s_zoomFrom.x1 + 3, (int)vx(outer, lo2) - po.x, MAP_W - 1); s_zoomFrom.y2 = (lv_coord_t)LV_CLAMP(s_zoomFrom.y1 + 3, (int)vy(outer, la2) - po.y, MAP_H - 1);
   bool zoomIn = z > s_zoom;
-  s_zoom = z; s_view = nv;
+  s_zoom = z; s_view = nv; s_pan = panOf(nv);
   placeMarker();
   lv_obj_invalidate(s_map);
   if (s_zoomTag) lv_label_set_text(s_zoomTag, zoomName(z));
@@ -995,7 +1033,8 @@ static void autoZoom(const AppState& s) {
       nearKm = LV_MIN(nearKm, d);
     }
     if (ov) {
-      float x = vx(ov, t.lon), y = vy(ov, t.lat);
+      lv_point_t po = panOf(ov);
+      float x = vx(ov, t.lon) - po.x, y = vy(ov, t.lat) - po.y;
       if (x >= 0 && x < MAP_W && y >= 0 && y < MAP_H) inObl = true;
     }
   }
@@ -1127,6 +1166,7 @@ static void showMain() {
   lv_obj_clear_flag(s_map, LV_OBJ_FLAG_SCROLLABLE);
   if (!viewFor(s_zoom)) { s_zoom = 0; }
   s_view = viewFor(s_zoom);
+  s_pan = panOf(s_view);
 
   // маркер користувача
   s_marker = lv_obj_create(s_map);

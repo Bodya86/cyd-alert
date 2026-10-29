@@ -6,4 +6,4 @@
 #include "map_views.h"
 // вид «уся Україна» поверх старого растру
 extern const MapView MAP_VIEW_UA = {MAP_PROJ_MINX, MAP_PROJ_MINY, MAP_PROJ_SCALE, MAP_PROJ_OFFX, MAP_PROJ_OFFY,
-                                    MAP_ROW_OFS, MAP_RUNS, nullptr, 0};
+                                    MAP_ROW_OFS, MAP_RUNS, nullptr, 0, 0, 0, MAP_W, MAP_H};

@@ -21,11 +21,13 @@ cityIdx = [i for i in range(N) if obl[i] in (KYIV, SEVAS)]
 water = json.load(open(os.path.join(TOOLS, "ne", "ua_water.geojson"), encoding="utf-8"))["features"]
 meta = open(os.path.join(ROOT, "include", "map_meta.h")).read()
 mv = lambda n: float(re.search(r"#define MAP_PROJ_%s ([-\d.]+)f" % n, meta).group(1))
-views = [(-1, "ua", (mv("MINX"), mv("MINY"), mv("SCALE"), mv("OFFX"), mv("OFFY")), 0)]
-for m in re.finditer(r"\{([-\d.]+)f, ([-\d.]+)f, ([-\d.]+)f, ([-\d.]+)f, ([-\d.]+)f, VO(\d+),.*//\s*(\S+)",
+views = [(-1, "ua", (mv("MINX"), mv("MINY"), mv("SCALE"), mv("OFFX"), mv("OFFY"), 0, 0, W, H), 0)]
+# растр виду може бути більшим за кадр (ex, ey, rw, rh — див. tools/gen_map_views.py)
+for m in re.finditer(r"\{([-\d.]+)f, ([-\d.]+)f, ([-\d.]+)f, ([-\d.]+)f, ([-\d.]+)f, VO(\d+), VR\d+, VL\d+, \d+, (-?\d+), (-?\d+), (\d+), (\d+)\},\s*//\s*(\S+)",
                      open(os.path.join(ROOT, "include", "map_views.h"), encoding="utf-8").read()):
-    if m.group(7) in WANT:
-        views.append((int(m.group(6)), m.group(7), tuple(float(m.group(i)) for i in range(1, 6)), 2 if m.group(7).startswith("c_") else 1))
+    if m.group(11) in WANT:
+        views.append((int(m.group(6)), m.group(11), tuple(float(m.group(i)) for i in range(1, 6)) + tuple(int(m.group(i)) for i in range(7, 11)),
+                      2 if m.group(11).startswith("c_") else 1))
 
 def disk(r):
     return [(dy, dx) for dy in range(-r, r + 1) for dx in range(-r, r + 1) if dy * dy + dx * dx <= r * r and (dy or dx)]
@@ -38,8 +40,9 @@ def shift(a, dy, dx, fill):
     return out
 
 def render(p, level):
-    minx, miny, sc, ox, oy = p
-    Wk, Hk = W * K, H * K
+    minx, miny, sc, ox, oy, ex, ey, rw, rh = p
+    ox += ex; oy += ey
+    Wk, Hk = rw * K, rh * K
     P = lambda lon, lat: (((lon * COSLAT - minx) * sc + ox) * K, ((-lat - miny) * sc + oy) * K)
     img = Image.new("L", (Wk, Hk), BG); d = ImageDraw.Draw(img)
     for i in sorted(range(N), key=lambda i: i in cityIdx):

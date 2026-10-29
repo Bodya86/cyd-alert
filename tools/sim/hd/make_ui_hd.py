@@ -19,8 +19,8 @@ def func(sig, body):
 
 K = "SIM_K"
 # мапа: проєкція → фізичні пікселі
-rep("p.x = (lv_coord_t)(c.x1 + vx(s_view, lon));", f"p.x = (lv_coord_t)(c.x1 + {K} * vx(s_view, lon));")
-rep("p.y = (lv_coord_t)(c.y1 + vy(s_view, lat));", f"p.y = (lv_coord_t)(c.y1 + {K} * vy(s_view, lat));")
+rep("p.x = (lv_coord_t)(c.x1 + vx(s_view, lon) - s_pan.x);", f"p.x = (lv_coord_t)(c.x1 + {K} * (vx(s_view, lon) - s_pan.x));")
+rep("p.y = (lv_coord_t)(c.y1 + vy(s_view, lat) - s_pan.y);", f"p.y = (lv_coord_t)(c.y1 + {K} * (vy(s_view, lat) - s_pan.y));")
 func("static void drawLabels(lv_draw_ctx_t* dc, const lv_area_t& c) {", r'''
 static void drawLabels(lv_draw_ctx_t* dc, const lv_area_t& c) {   // HD: ті самі підписи, координати ×SIM_K
   const MapView* v = s_view;
@@ -31,13 +31,19 @@ static void drawLabels(lv_draw_ctx_t* dc, const lv_area_t& c) {   // HD: ті с
   lv_draw_rect_dsc_t dd; lv_draw_rect_dsc_init(&dd);
   dd.bg_opa = LV_OPA_COVER; dd.radius = 0; dd.border_width = 0;
   static const uint32_t KC[3] = {0xE6EDF3, 0xC9D1D9, 0x8B98A5};
+  const int ox = c.x1 - K * s_pan.x, oy = c.y1 - K * s_pan.y;
   for (int i = 0; i < v->nlabels; i++) {
     const MapLabel& L = v->labels[i];
-    lv_area_t dot = {(lv_coord_t)(c.x1 + K * (L.x - 1)), (lv_coord_t)(c.y1 + K * (L.y - 1)),
-                     (lv_coord_t)(c.x1 + K * (L.x + (L.kind < 2 ? 2 : 1)) - 1), (lv_coord_t)(c.y1 + K * (L.y + (L.kind < 2 ? 2 : 1)) - 1)};
+    if (L.kind >= 2 && s_uiLevel >= LVL_ORANGE) continue;
+    lv_area_t a = {(lv_coord_t)(ox + K * L.lx), (lv_coord_t)(oy + K * (L.ly - 1)), (lv_coord_t)(ox + K * (L.lx + 110)), (lv_coord_t)(oy + K * (L.ly + 14))};
+    lv_area_t tb = a;
+    tb.x2 = (lv_coord_t)(tb.x1 + lv_txt_get_width(L.name, strlen(L.name), ld.font, 0, LV_TEXT_FLAG_NONE));
+    tb.y1 = (lv_coord_t)LV_MIN(tb.y1, oy + K * (L.y - 1));
+    if (tb.x1 < c.x1 || tb.x2 > c.x2 || tb.y1 < c.y1 - 2 * K || tb.y1 + 14 * K > c.y2 || labelHidden(tb)) continue;
+    lv_area_t dot = {(lv_coord_t)(ox + K * (L.x - 1)), (lv_coord_t)(oy + K * (L.y - 1)),
+                     (lv_coord_t)(ox + K * (L.x + (L.kind < 2 ? 2 : 1)) - 1), (lv_coord_t)(oy + K * (L.y + (L.kind < 2 ? 2 : 1)) - 1)};
     dd.bg_color = col(KC[L.kind > 2 ? 2 : L.kind]);
     lv_draw_rect(dc, &dd, &dot);
-    lv_area_t a = {(lv_coord_t)(c.x1 + K * L.lx), (lv_coord_t)(c.y1 + K * (L.ly - 1)), (lv_coord_t)(c.x1 + K * (L.lx + 110)), (lv_coord_t)(c.y1 + K * (L.ly + 14))};
     lv_area_t sh = a; sh.x1 += K; sh.x2 += K; sh.y1 += K; sh.y2 += K;
     ld.color = lv_color_black(); ld.opa = LV_OPA_70;
     lv_draw_label(dc, &ld, &sh, L.name, nullptr);
@@ -64,8 +70,12 @@ static void mapDrawCb(lv_event_t* e) {
   lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
   d.bg_opa = LV_OPA_COVER; d.radius = 0; d.border_width = 0;
   int y0 = LV_MAX(clip->y1, c.y1), y1 = LV_MIN(LV_MIN(clip->y2, c.y2), c.y1 + MAP_H * SIM_K - 1);
+  const int xs = (s_view->ex + s_pan.x) * SIM_K, ys = (s_view->ey + s_pan.y) * SIM_K;   // кадр у растрі (фіз. пікселі)
+  const int FW = MAP_W * SIM_K, RH = s_view->rh * SIM_K;
   for (int y = y0; y <= y1; y++) {
-    int row = (y - c.y1) / sub, x = 0, runX = 0, runN = 0;
+    int yy = y - c.y1 + ys;
+    if (yy < 0 || yy >= RH) continue;
+    int row = yy / sub, x = -xs, runX = 0, runN = 0;
     uint32_t r0 = hm ? hm->rows[row] : s_view->rowOfs[row], r1 = hm ? hm->rows[row + 1] : s_view->rowOfs[row + 1];
     const uint8_t* RUNS = hm ? hm->runs : s_view->runs;
     lv_color_t runC = s_pal[MAP_BG];
@@ -78,14 +88,19 @@ static void mapDrawCb(lv_event_t* e) {
     };
     for (uint32_t i = r0; i < r1; i++) {
       int n = RUNS[i * 2] * sub; uint8_t v = RUNS[i * 2 + 1];
+      int a0 = x, a1 = x + n;
+      x = a1;
+      if (a1 <= 0) continue;
+      if (a0 >= FW) break;
+      if (a0 < 0) a0 = 0;
+      if (a1 > FW) a1 = FW;
       if (v == MAP_BG) { flush(); }
       else {
         lv_color_t cc = s_pal[v];
         if (runN && cc.full != runC.full) flush();
-        if (!runN) { runX = x; runC = cc; }
-        runN += n;
+        if (!runN) { runX = a0; runC = cc; }
+        runN = a1 - runX;
       }
-      x += n;
     }
     flush();
   }
