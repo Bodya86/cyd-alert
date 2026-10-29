@@ -16,7 +16,7 @@
 // http://<host>/static/api/state/... кожні POLL_RT_MS, а якщо й він недоступний — як раніше, GitHub (адреса з налаштувань).
 // Вмикається, коли в налаштуваннях стоїть стандартна адреса GitHub Pages (або адреса цього сервера). "" — вимкнено.
 #ifndef RT_SERVER_HOST
-#define RT_SERVER_HOST ""
+#define RT_SERVER_HOST "178.105.247.133"   // Hetzner cx23 cyd-alert-rt (https://178.105.247.133.sslip.io)
 #endif
 #define POLL_RT_MS          4000UL
 #define POLL_SERVER_MS      10000UL   // companion-сервер
