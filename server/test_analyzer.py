@@ -16,7 +16,7 @@ class T(unittest.TestCase):
             with self.subTest(text=c["t"]):
                 ch = c.get("ch")
                 remote = bool(ch) and not an.channel_is_local(ch, "kremenchuk")
-                e = an.analyze_post(c["t"], "kremenchuk", c["d"], remote)
+                e = an.analyze_post(c["t"], "kremenchuk", c["d"], remote, an.channel_is_home(ch, "kremenchuk"))
                 self.assertEqual(e.level, _LV[c["lvl"]])
                 if c.get("near") is not None:
                     self.assertEqual(e.near, c["near"])

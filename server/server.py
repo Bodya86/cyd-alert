@@ -366,6 +366,13 @@ def tg_summary(feeds, city, district, now=None):
 
 
 # ---------- API ----------
+def oblast_alert(rs, obl, oblast):
+    """Є офіційна тривога хоч у якомусь районі вашої області (або в області загалом)."""
+    if 0 <= oblast < len(obl) and obl[oblast] in "ARYP":
+        return True
+    return any(i < len(rs) and rs[i] != "." for i in REG_BY_OBLAST.get(oblast, []))
+
+
 def state(q):
     city = q.get("city") or None
     district = q.get("district") or None
@@ -388,11 +395,16 @@ def state(q):
         c = obl[oblast] if 0 <= oblast < len(obl) else "N"
         off_lvl, off_part = (1 if c in "ARYP" else 0), c == "P"
     official = off_lvl > 0
+    obl_alert = official or oblast_alert(rs, obl, oblast)
     # Та сама логіка, що computeFinalLevel() у прошивці:
-    #  офіційна тривога у вашому районі → max(тип тривоги, Telegram); без неї — Telegram лише при балі >= 5
+    #  офіційна тривога у вашому районі → max(тип тривоги, Telegram); без неї — Telegram лише при балі >= 5;
+    #  помаранчевий/червоний без офіційної тривоги в області — лише за свіжим (≤20 хв) постом прямо про ваше місто/район.
+    lvl_raw = lvl
+    lvl = an.cap_level(lvl, obl_alert, ev.explicit)
     final = max(off_lvl, lvl) if official else (lvl if ev.score >= 5 else an.GREEN)
     tg, summ, _ = assess(q)
-    final = max(final, summ["level"])
+    tlvl = an.cap_level(summ["level"], obl_alert, False)   # прогноз трекера без тривоги в області — не вище жовтого
+    final = max(final, tlvl)
     compact = []
     kept = []
     for d in tg[:12]:
@@ -420,7 +432,10 @@ def state(q):
         if ulat is not None:
             hm = HIST.heat_window(ulat, ulon)
     return {
-        "level": an.LEVEL_NAMES[lvl],          # рівень за Telegram (прошивка сама комбінує з офіційним)
+        "level": an.LEVEL_NAMES[lvl],          # рівень за Telegram (уже обмежений правилом cap_level)
+        "tg_raw": an.LEVEL_NAMES[lvl_raw],
+        "explicit": bool(ev.explicit),
+        "obl_alert": bool(obl_alert),
         "final": an.LEVEL_NAMES[final],
         "score": ev.score,
         "text": (best or {}).get("text", "")[:350],
@@ -449,7 +464,7 @@ def state(q):
         "p_missile": round(summ["p_missile"][30] * 100),
         "p_near15": round(summ["p_any"][15] * 100),
         "eta": round(summ["eta_min"]) if summ["eta_min"] is not None else -1,
-        "tlevel": an.LEVEL_NAMES[summ["level"]],
+        "tlevel": an.LEVEL_NAMES[tlvl],
         "tgt": compact,
         "lt": lt,
         "lp": lp,

@@ -10,6 +10,8 @@
 Стан (останній надісланий рівень/час) — <out>/notify_state.json, переживає перезапуски live.yml через гілку data.
 """
 import io, json, math, os, time, urllib.parse, urllib.request, uuid
+os.environ.setdefault("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4")   # час у підписах — за Києвом (runner GitHub — UTC)
+time.tzset()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CFG_PATH = os.path.join(ROOT, "data", "notify.json")
@@ -224,8 +226,6 @@ def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
     dr.rectangle([0, 0, w, 44 * S], fill=bar)
     title = {2: "КУРС НА МІСТО", 3: "НЕБЕЗПЕКА"}.get(level, "ЧИСТО") + " · " + (cfg.get("label") or "")
     dr.text((14 * S, 8 * S), title, font=font(22, True), fill=(11, 15, 20))
-    dr.text((14 * S, h - 24 * S), time.strftime("%d.%m %H:%M") + " · Дані: JAAM (jaam.net.ua), Telegram-канали",
-            font=font(12), fill=(139, 152, 165))
     img = img.resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)

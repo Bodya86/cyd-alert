@@ -44,6 +44,61 @@ static void addReason(char* r, size_t n, const char* s) {
   strlcat(r, s, n);
 }
 
+bool channelIsHome(const char* ch, const CityDef* city) {
+  if (!ch || !ch[0] || !city) return true;
+  if (ch[0] == '@') ch++;
+  if (city->channel && !strcasecmp(city->channel, ch)) return true;
+  for (int i = 0; i < CHANNEL_COUNT; i++)
+    if (!strcasecmp(CHANNELS[i].id, ch)) return CHANNELS[i].home[0] && !strcmp(CHANNELS[i].home, city->id);
+  return false;
+}
+
+// «по нам», «над містом», «на город» — займенникові ключі (лише для міського каналу)
+static bool isGenericKw(const char* kw) {
+  static const char* const P[] = {"по ", "на ", "над ", "в ", "у ", "до "};
+  for (auto p : P) if (!strncmp(kw, p, strlen(p))) return true;
+  return false;
+}
+static bool endsWith(const char* s, size_t n, const char* suf) {
+  size_t l = strlen(suf);
+  return n >= l && !memcmp(s + n - l, suf, l);
+}
+// токен-прикметник / «-щина»: «кременчуцкий (район)», «полтавска», «кременчуччина» — район/область, не місто
+static bool isAdjToken(const char* s, size_t n) {
+  while (n && (s[n - 1] == '.' || s[n - 1] == '-' || s[n - 1] == '/')) n--;
+  static const char* const E[] = {"ий", "ого", "ому", "им", "ими", "ом", "ая", "а", "ои", "ой", "ую", "у", "ие", "их", "е", "и"};
+  static const char* const K[] = {"цк", "ск", "зк"};
+  for (auto e : E) {
+    if (!endsWith(s, n, e)) continue;
+    size_t m = n - strlen(e);
+    for (auto k : K) if (endsWith(s, m, k)) return true;
+  }
+  char tok[64]; size_t l = n < sizeof(tok) - 1 ? n : sizeof(tok) - 1;
+  memcpy(tok, s, l); tok[l] = 0;
+  return strstr(tok, "щин") || strstr(tok, "ччин");
+}
+// → місто згадано; *raion — згадано лише прикметником (район/область)
+static bool cityMatch(const char* t, const CityDef* c, bool home, bool* raion) {
+  bool hit = false, adj = false;
+  for (int k = 0; k < c->nkw; k++) {
+    const char* kw = c->kw[k];
+    if (isGenericKw(kw)) { if (home && strstr(t, kw)) hit = true; continue; }
+    for (const char* p = strstr(t, kw); p; p = strstr(p + 1, kw)) {
+      const char* s = p; while (s > t && s[-1] != ' ') s--;
+      const char* e = p; while (*e && *e != ' ') e++;
+      if (isAdjToken(s, e - s)) adj = true; else hit = true;
+    }
+  }
+  *raion = adj && !hit;
+  return hit;
+}
+static bool isAmbigDistrictKw(const char* kw) {
+  static const char* const A[] = {"центр", "соборн", "набережн", "площ", "правий берег", "правобереж", "нпз",
+                                  "нефтезавод", "нафтозавод", "промзон", "автозавод"};
+  for (auto a : A) if (!strcmp(kw, a)) return true;
+  return false;
+}
+
 bool channelIsLocal(const char* ch, const CityDef* city) {
   if (!city || !ch || !ch[0]) return false;
   if (city->channel && !strcasecmp(city->channel, ch)) return true;
@@ -56,8 +111,9 @@ bool channelIsLocal(const char* ch, const CityDef* city) {
   return false;
 }
 
-PostEval analyzePost(const char* text, const CityDef* city, int district, bool remote) {
+PostEval analyzePost(const char* text, const CityDef* city, int district, bool remote, int homeArg) {
   PostEval ev;
+  bool home = homeArg < 0 ? !remote : homeArg != 0;
   static char low[TG_TEXT_MAX * 2];
   utf8Fold(text, low, sizeof(low));
 
@@ -80,16 +136,20 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
   bool escalate = countWords(low, RULE_ESCALATE.w, RULE_ESCALATE.n) > 0;
   ev.clear = countWords(low, RULE_CLEAR.w, RULE_CLEAR.n) > 0;
 
-  bool inCity = false;
+  bool inCity = false, raionHit = false;
   int distBonus = 0, settlBonus = 0;
   bool settlHit = false;
   const char* placeHit = nullptr;
   if (city) {
-    inCity = countWords(low, city->kw, city->nkw) > 0;
+    inCity = cityMatch(low, city, home, &raionHit);
+    bool named = inCity;
     int userSector = (district >= 0 && district < city->ndist) ? city->districts[district].sector : -2;
     for (int d = 0; d < city->ndist; d++) {
       const DistrictDef& D = city->districts[d];
-      if (!countWords(low, D.kw, D.nkw)) continue;
+      bool dh = false;
+      for (int k = 0; k < D.nkw && !dh; k++)
+        if ((home || named || !isAmbigDistrictKw(D.kw[k])) && strstr(low, D.kw[k])) dh = true;
+      if (!dh) continue;
       inCity = true;
       int b;
       if (d == district) b = 4;
@@ -133,7 +193,7 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
     }
   }
   ev.threat = best >= 0 ? (uint8_t)best : 255;
-  ev.local = inCity || settlHit || distBonus || oblHit || (nAt && nearestKm <= NEAR_PLACE_KM);
+  ev.local = inCity || settlHit || distBonus || oblHit || raionHit || (nAt && nearestKm <= NEAR_PLACE_KM);
   ev.relevant = threatW > 0 || inCity || settlBonus > 0 || approach || unknownDir;
   if (!ev.relevant && !ev.clear) return ev;
 
@@ -196,6 +256,7 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
     else if (inCity || settlBonus >= 2 || ev.near) ev.prox = 1;
     bool ballisticObl = best >= 0 && !strcmp(THREATS[best].type, "ballistic") && oblHit;
     ev.level = levelOf(ev.cls, ev.prox, ev.oblastWide || ballisticObl, settlBonus > 0);
+    ev.explicitCity = inCity || distBonus || settlBonus >= 2 || ev.oblastWide || ballisticObl;
   }
   return ev;
 }
@@ -212,18 +273,24 @@ Level agedLevel(const PostEval& e, long ageMin) {
 }
 
 Level analyzeFeed(const TgPost* posts, int n, const CityDef* city, int district, time_t now,
-                  int* bestIdx, PostEval* bestEval, bool remote) {
+                  int* bestIdx, PostEval* bestEval, bool remote, int home) {
   Level cur = LVL_GREEN;
   int best = -1;
   PostEval bestE;
+  if (now < 1600000000L) {   // годинник ще не синхронізований (NTP) — вік постів невідомий, старі пости не рахуємо
+    if (bestIdx) *bestIdx = -1;
+    if (bestEval) *bestEval = bestE;
+    return LVL_GREEN;
+  }
   for (int i = 0; i < n; i++) {
     const TgPost& p = posts[i];
     if (!p.text[0]) continue;
     long ageMin = (now > 100000 && p.ts) ? (long)(now - p.ts) / 60 : 0;
     if (ageMin > POST_YELLOW_TTL_MIN) continue;
-    PostEval e = analyzePost(p.text, city, district, remote);
+    PostEval e = analyzePost(p.text, city, district, remote, home);
     if (e.ignored) continue;
     e.level = agedLevel(e, ageMin);
+    if (ageMin > POST_EXPLICIT_TTL_MIN) e.explicitCity = false;
     if (e.clear && e.level == LVL_GREEN) { cur = LVL_GREEN; best = i; bestE = e; continue; }
     Level l = e.level;
     if (e.oblastWide && ageMin > POST_OBLAST_TTL_MIN) continue;

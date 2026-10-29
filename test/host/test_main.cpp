@@ -12,7 +12,7 @@ static int fails = 0;
 static void expect(const char* txt, const char* d, Level want, int near = -1, int far = -1, int ow = -1, const char* ch = "") {
   const CityDef* k = city("kremenchuk");
   bool remote = ch && ch[0] && !channelIsLocal(ch, k);
-  PostEval e = analyzePost(txt, k, dist(k, d), remote);
+  PostEval e = analyzePost(txt, k, dist(k, d), remote, channelIsHome(ch, k) ? 1 : 0);
   bool ok = e.level == want && (near < 0 || (int)e.near == near) && (far < 0 || (int)e.far == far) &&
             (ow < 0 || (int)e.oblastWide == ow);
   if (!ok) fails++;

@@ -277,10 +277,16 @@ static String serverBase() {
 // Статичні дані оновлюються GitHub Actions раз на ~5–15 хв: беремо звідти прогноз цілей (фільтри частинок),
 // а тривоги й Telegram ESP і далі читає сам напряму (свіжіше). Тривоги зі статики — лише якщо прямі джерела впали.
 static uint32_t s_staticAt = 0;
+static time_t s_staticGen = 0;   // поле generated останнього отриманого файлу (для перевірки віку при 304)
+static long staticAgeS() {
+  time_t nowT = time(nullptr);
+  return (nowT > 1600000000L && s_staticGen > 0) ? (long)(nowT - s_staticGen) : 0;
+}
 static void cloudFromStatic(JsonDocument& doc, long age);
 static void tgAggregate();
 static bool applyStatic(JsonDocument& doc, bool& gotOblasts) {
   time_t gen = (time_t)(doc["generated"] | 0L), nowT = time(nullptr);
+  s_staticGen = gen;
   long age = (nowT > 100000 && gen > 0) ? (long)(nowT - gen) : 0;   // с
   bool fresh = age < 20 * 60;
   const char* ob = doc["oblasts"] | "";
@@ -409,7 +415,13 @@ static bool fetchServer(bool& gotOblasts) {
     if (c) path += String("/") + c->id + (d ? String("/") + d->id : String("")) + ".json";
     else path += ".json";
     int r = ghDataGet(path, body);
-    if (r == 304) { s_staticAt = millis(); return true; }   // не змінилось
+    if (r == 304) {   // не змінилось. Але якщо live.yml зупинився, файл «застигає»: старі цілі/рівень не тримаємо
+      long age = staticAgeS();
+      if (age < 20 * 60) s_staticAt = millis();
+      if (age >= 20 * 60) Serial.printf("[static] дані застарілі: %ld хв\n", age / 60);
+      tgAggregate();
+      return true;
+    }
     if (r != 200) {
       String url = serverBase() + "/" + path;   // GitHub Pages (раз на годину)
       if (!httpGet(url, body) && !(c && httpGet(serverBase() + "/api/state.json", body))) return false;
@@ -431,6 +443,7 @@ static bool fetchServer(bool& gotOblasts) {
   g_state.tgLevel = parseLevel(doc["level"] | "green");
   g_state.tgScore = doc["score"] | 0;
   g_state.tgNear = doc["near"] | false;
+  g_state.tgExplicit = doc["explicit"] | false;
   strlcpy(g_state.tgKind, doc["kind"] | "", sizeof(g_state.tgKind));
   strlcpy(g_state.tgText, doc["text"] | "", sizeof(g_state.tgText));
   strlcpy(g_state.tgReason, doc["reason"] | "", sizeof(g_state.tgReason));
@@ -476,6 +489,7 @@ struct ChanRes {
   bool near = false;
   time_t ts = 0, clearTs = 0;
   uint8_t threat = 255;
+  bool expl = false;        // свіжий пост прямо про ваше місто/район (див. capLevel)
   char kind[24] = {0};
   char reason[80] = {0};
   char text[CH_TEXT] = {0};
@@ -507,11 +521,12 @@ static uint8_t chanWeight(int i) { return i < CHANNEL_COUNT ? CHANNELS[i].weight
 static void cloudFromStatic(JsonDocument& doc, long age) {
   if (doc["level"].isNull()) return;
   ChanRes& c = s_cloud;
-  c.ok = age < 5 * 60;
+  c.ok = age < 8 * 60;   // live.yml перезаписує файл щонайменше раз на 5 хв
   c.at = millis();
   c.lvl = parseLevel(doc["level"] | "green");
   c.score = doc["score"] | 0;
   c.near = doc["near"] | false;
+  c.expl = doc["explicit"] | false;
   c.ts = (time_t)(doc["ts"] | 0L);
   c.clearTs = 0;
   utf8Copy(c.kind, doc["kind"] | "", sizeof(c.kind));
@@ -532,6 +547,7 @@ static void tgAggregate() {
     nOk++;
     if (chanLocal(i) && s_ch[i].clearTs > clearTs) clearTs = s_ch[i].clearTs;
   }
+  if (s_staticGen && staticAgeS() >= 8 * 60) s_cloud.ok = false;   // хмара «застигла» (live.yml зупинився)
   int best = -1;   // CH_EXTRA+1 = хмара
   auto res = [&](int i) -> ChanRes& { return i > CH_EXTRA ? s_cloud : s_ch[i]; };
   auto weight = [&](int i) -> int { return i > CH_EXTRA ? 85 : chanWeight(i); };
@@ -549,7 +565,7 @@ static void tgAggregate() {
   g_state.tgNch = nOn; g_state.tgNok = nOk;
   if (best < 0) {
     g_state.tgLevel = LVL_GREEN; g_state.tgScore = 0; g_state.tgNear = false; g_state.tgKind[0] = 0;
-    g_state.tgText[0] = 0; g_state.tgTime = 0; g_state.tgChan[0] = 0; g_state.tgAgree = 0;
+    g_state.tgText[0] = 0; g_state.tgTime = 0; g_state.tgChan[0] = 0; g_state.tgAgree = 0; g_state.tgExplicit = false;
     snprintf(g_state.tgReason, sizeof(g_state.tgReason), "немає свіжих загроз (%d/%d каналів)", nOk, nOn);
   } else {
     ChanRes& b = res(best);
@@ -565,6 +581,7 @@ static void tgAggregate() {
     int score = b.score + (agree >= 2 ? 1 : 0);
     if (L == LVL_RED && agree < 2 && weight(best) < 50) L = LVL_ORANGE;   // лише малодовірене джерело — на щабель нижче
     g_state.tgLevel = L;
+    g_state.tgExplicit = b.expl && (!b.ts || nowT < 1600000000L || nowT - b.ts <= POST_EXPLICIT_TTL_MIN * 60);
     g_state.tgScore = score;
     g_state.tgNear = b.near || score >= 7;
     g_state.tgAgree = agree;
@@ -595,9 +612,10 @@ static bool fetchOneChannel(int i) {
   if (n < 0) { r.ok = false; return false; }
   bool remote = !chanLocal(i);
   int best = -1; PostEval ev;
-  Level l = analyzeFeed(s_posts, n, userCity(), g_set.district, time(nullptr), &best, &ev, remote);
+  Level l = analyzeFeed(s_posts, n, userCity(), g_set.district, time(nullptr), &best, &ev, remote,
+                        (i == CH_EXTRA || channelIsHome(ch, userCity())) ? 1 : 0);
   r.ok = true;
-  r.lvl = l; r.score = ev.score; r.near = ev.near; r.threat = ev.threat;
+  r.lvl = l; r.score = ev.score; r.near = ev.near; r.threat = ev.threat; r.expl = ev.explicitCity;
   utf8Copy(r.kind, ev.kind, sizeof(r.kind));
   utf8Copy(r.reason, ev.reason, sizeof(r.reason));
   r.clearTs = 0;

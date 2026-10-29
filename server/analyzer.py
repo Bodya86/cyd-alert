@@ -4,11 +4,18 @@ import json, math, os, re, time
 from dataclasses import dataclass, field
 from textnorm import fold, fold_kw, fuzzy_any
 
+# Увесь сервер (GitHub Actions працює в UTC) показує час за Києвом: підписи, журнали, добова статистика.
+# Порівняння «свіжості» постів скрізь ідуть в epoch-секундах і від поясу не залежать.
+os.environ["TZ"] = os.environ.get("CYD_TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4")
+if hasattr(time, "tzset"):
+    time.tzset()
+
 DATA = os.environ.get("CYD_DATA", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"))
 RED_TTL_MIN, YELLOW_TTL_MIN = 15, 40   # ракети/КАБ, дрони
 OBLAST_TTL_MIN = 10                    # «балістика хз звідки» — червоний на всю область, коротко
 FAR_KM = 150                           # місце далі — «далека ціль» (лише інформація)
 NEAR_KM = 60                           # для загальнонаціональних каналів: місце ближче — пост «наш»
+EXPLICIT_TTL_MIN = 20                  # пост «курс на ваше місто» дає помаранчевий/червоний без тривоги не довше
 DEDUP_MIN = 10                         # одна подія з різних каналів: той самий тип+місце в межах 10 хв
 
 # Рівні за БЛИЗЬКІСТЮ до вас (екран фарбується відповідно, без модальних вікон):
@@ -49,6 +56,40 @@ for _c in LOC["cities"]:
     for _d in _c["districts"]:
         _d["kw_f"] = [fold_kw(w) for w in _d["keywords"] + [_d["name"].lower()]]
 FROM_WORDS = {"с", "з", "из", "зи", "от", "вид", "со", "из-за", "через"}
+# «по нам», «над містом», «на город»… — займенникові ключі міста: означають НАШЕ місто лише в міському каналі цього міста
+GENERIC_PREP = ("по ", "на ", "над ", "в ", "у ", "до ")
+# прикметник / «-щина»: «Кременчуцький район», «Полтавська область», «Кременчуччина» — це район/область, а не місто
+_ADJ_RE = re.compile(r"(?:[цсз]к(?:ий|ого|ому|им|ими|ом|ая|а|ои|ой|ую|у|ие|их|е|и)|(?:щин|ччин)[а-я]*)$")
+
+
+# загальні слова районів міста («центр», «НПЗ», «набережна»): з чужого каналу без назви міста — це про інше місто
+AMBIG_DISTRICT_KW = {"центр", "соборн", "набережн", "площ", "правий берег", "правобереж", "нпз", "нефтезавод",
+                     "нафтозавод", "промзон", "автозавод"}
+
+
+def is_generic_kw(kw):
+    return kw.startswith(GENERIC_PREP)
+
+
+def city_match(t, kws, home=True):
+    """→ (місто згадано, згадано лише район/прикметник). Займенникові ключі — лише для home-каналу."""
+    hit = raion = False
+    for kw in kws:
+        if is_generic_kw(kw):
+            if home and kw in t:
+                hit = True
+            continue
+        i = t.find(kw)
+        while i >= 0:
+            s = t.rfind(" ", 0, i) + 1
+            e = t.find(" ", i)
+            tok = t[s:e if e >= 0 else len(t)].strip(".-/")
+            if _ADJ_RE.search(tok):
+                raion = True
+            else:
+                hit = True
+            i = t.find(kw, i + 1)
+    return hit, raion and not hit
 
 
 def norm(text: str) -> str:
@@ -117,6 +158,8 @@ class PostEval:
     threat: str = ""           # тип загрози (ballistic/missile/kab/drone/...)
     cls: int = 0               # CLS_DRONE / CLS_MISSILE (0 — немає)
     prox: int = 0              # 0 — область/загально, 1 — місто/курс на місто/поруч, 2 — ваш район/над вами
+    explicit: bool = False     # пост прямо про ваше місто/район/≤15 км (або балістика на область) — може дати
+                               # помаранчевий/червоний і БЕЗ офіційної тривоги; інакше без тривоги — не вище жовтого
     reasons: list = field(default_factory=list)
 
     @property
@@ -127,6 +170,14 @@ class PostEval:
 def channel_cfg(ch):
     return CHANNELS.get((ch or "").lower().lstrip("@")) or {"id": ch, "scope": "national", "oblasts": [], "home": None,
                                                             "weight": 0.5, "default": False}
+
+
+def channel_is_home(ch, city_id):
+    """Міський канал саме цього міста (kremen_sv для Кременчука): лише в ньому «по нам / над містом» = наше місто."""
+    if not ch or not city_id:
+        return True
+    c = channel_cfg(ch)
+    return c.get("home") == city_id or (CITIES.get(city_id) or {}).get("channel", "").lower() == ch.lower().lstrip("@")
 
 
 def channel_is_local(ch, city_id):
@@ -155,7 +206,10 @@ def default_channels(city_id=None, oblast=None):
     return out
 
 
-def analyze_post(text: str, city_id: str = None, district_id: str = None, remote: bool = False) -> PostEval:
+def analyze_post(text: str, city_id: str = None, district_id: str = None, remote: bool = False, home: bool = None) -> PostEval:
+    """home — пост із міського каналу цього міста (None → not remote, для старих викликів і тестів)."""
+    if home is None:
+        home = not remote
     ev = PostEval()
     t = fold(text)
     ign = len(_any(t, RULES["ignore"]))
@@ -170,14 +224,16 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
     ev.clear = bool(_any(t, RULES["clear"]))
 
     city = CITIES.get(city_id) if city_id else None
-    in_city, dist_bonus, settl_bonus, place, settl_hit = False, 0, 0, None, False
+    in_city, dist_bonus, settl_bonus, place, settl_hit, raion_hit = False, 0, 0, None, False, False
     if city:
-        in_city = bool(_any(t, city["kw_f"]))
+        in_city, raion_hit = city_match(t, city["kw_f"], home)
         dists = city["districts"]
         ud = next((d for d in dists if d["id"] == district_id), None)
         user_sector = ud["sector"] if ud else -2
+        named = in_city
         for d in dists:
-            if not _any(t, d["kw_f"]):
+            kws = d["kw_f"] if (home or named) else [k for k in d["kw_f"] if k not in AMBIG_DISTRICT_KW]
+            if not _any(t, kws):
                 continue
             in_city = True
             if ud and d["id"] == ud["id"]:
@@ -207,7 +263,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
             if role == "at" and km_between(city["lat"], city["lon"], pl["lat"], pl["lon"]) <= NEAR_KM:
                 near_place = pl
                 break
-    ev.local = bool(in_city or settl_hit or dist_bonus or obl_hit or near_place)
+    ev.local = bool(in_city or settl_hit or dist_bonus or obl_hit or near_place or raion_hit)
     if dist_bonus:
         ev.place = place or ""
     elif settl_hit:
@@ -216,6 +272,8 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
         ev.place = "city"
     elif near_place:
         ev.place = near_place["n"]
+    elif raion_hit:
+        ev.place = "raion"
     elif obl_hit:
         ev.place = "oblast"
     elif places:
@@ -288,6 +346,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
             ev.prox = 1
         ballistic_obl = ev.threat == "ballistic" and obl_hit      # «балістика на Полтавщину» — хвилини до удару
         ev.level = level_of(ev.cls, ev.prox, ev.oblast_wide or ballistic_obl, bool(settl_bonus))
+        ev.explicit = bool(in_city or dist_bonus or settl_bonus >= 2 or ev.oblast_wide or ballistic_obl)
     return ev
 
 
@@ -322,6 +381,8 @@ def analyze_feed(posts, city_id=None, district_id=None, now=None, remote=False):
         if e.ignored:
             continue
         e.level = aged_level(e, age_min)
+        if e.explicit and age_min > EXPLICIT_TTL_MIN:
+            e.explicit = False
         if e.clear and e.level == GREEN:
             cur, best, best_ev = GREEN, p, e
             continue
@@ -358,6 +419,7 @@ def analyze_multi(feeds, city_id=None, district_id=None, now=None):
     for ch, posts in (feeds or {}).items():
         cfg = channel_cfg(ch)
         remote = not channel_is_local(ch, city_id)
+        home = channel_is_home(ch, city_id)
         for p in posts or []:
             if not p.get("text"):
                 continue
@@ -365,10 +427,12 @@ def analyze_multi(feeds, city_id=None, district_id=None, now=None):
             age = (now - ts) / 60
             if age > YELLOW_TTL_MIN:
                 continue
-            e = analyze_post(p["text"], city_id, district_id, remote)
+            e = analyze_post(p["text"], city_id, district_id, remote, home)
             if e.ignored:
                 continue
             e.level = aged_level(e, age)
+            if e.explicit and age > EXPLICIT_TTL_MIN:
+                e.explicit = False    # «курс на місто» старший за 20 хв — уже не підстава для помаранчевого
             if e.clear and e.level == GREEN:
                 if not remote or e.local:
                     last_clear = max(last_clear, ts)
@@ -410,3 +474,11 @@ def analyze_multi(feeds, city_id=None, district_id=None, now=None):
         if k > best_key:
             best_key, cur, best, best_ev = k, lvl, {**p, "channel": ch}, e
     return cur, best, best_ev, clusters
+
+
+def cap_level(level, official_oblast, explicit):
+    """Головне правило: помаранчевий/червоний для вашого міста — лише якщо є офіційна тривога у вашій області/районі
+    або свіжий (≤ EXPLICIT_TTL_MIN) пост прямо про ціль на ваше місто/район. Інакше — не вище жовтого."""
+    if official_oblast or explicit:
+        return level
+    return min(level, YELLOW)

@@ -1,5 +1,8 @@
 """Тест сповіщень Telegram (workflow tg-test): одне повідомлення з мапою. --dry-run — без надсилання."""
 import json, os, sys, urllib.error, urllib.parse, urllib.request, uuid, io
+import os, time
+os.environ.setdefault("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4")   # час у підписах — за Києвом (runner GitHub — UTC)
+time.tzset()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tg_notify as tn
 

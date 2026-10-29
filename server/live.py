@@ -12,6 +12,8 @@
   * стан трекера на старті береться з origin/<branch>:tracker_state.json (попередній запуск).
 """
 import argparse, json, os, subprocess, sys, tempfile, time, traceback
+os.environ.setdefault("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4")   # час у підписах — за Києвом (runner GitHub — UTC)
+time.tzset()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("JAAM", "1")

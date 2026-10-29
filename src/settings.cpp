@@ -1,4 +1,5 @@
 #include "app.h"
+#include "analyzer.h"
 #include <Preferences.h>
 #include <strings.h>
 
@@ -172,8 +173,19 @@ Level computeFinalLevel(AppState& s) {
   }
   s.offLevel = off;
   s.offPartial = part;
-  Level tg = s.tgLevel;
+  bool obl = off > LVL_GREEN;
+  if (!obl && g_set.oblast >= 0) {
+    if (g_set.oblast < OBLAST_COUNT && strchr("ARYP", s.oblasts[g_set.oblast]) && s.oblasts[g_set.oblast]) obl = true;
+    for (int i = 0; i < MAP_REGION_COUNT && !obl; i++)
+      if (MAP_REGIONS[i].oblast == g_set.oblast && regionLevel(s.regions[i]) > LVL_GREEN) obl = true;
+  }
+  s.oblAlert = obl;
+  // Помаранчевий/червоний без офіційної тривоги в області — лише за свіжим постом прямо про ваше місто/район
+  Level tg = capLevel(s.tgLevel, obl, s.tgExplicit);
   Level res = off > LVL_GREEN ? (tg > off ? tg : off) : (s.tgScore >= 5 ? tg : LVL_GREEN);
-  if (s.trkOk && s.trkLevel > res) res = s.trkLevel;   // трекер сервера: P(ціль пролетить поруч) вище порогу
+  if (s.trkOk) {   // трекер сервера: P(ціль пролетить поруч) вище порогу; без тривоги в області — не вище жовтого
+    Level t = capLevel(s.trkLevel, obl, false);
+    if (t > res) res = t;
+  }
   return res;
 }
