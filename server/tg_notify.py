@@ -3,7 +3,8 @@
 Рівень для «вашої» адреси (data/notify.json: city/district) береться з api/state/<city>[/<district>].json,
 який щойно записав build_static.write_outputs (поле final — та сама логіка, що на ESP).
 
-  • підвищення до помаранчевого («КУРС НА МІСТО») або червоного («НЕБЕЗПЕКА») → sendPhoto (мапа PNG) / sendMessage;
+  • підвищення до помаранчевого або червоного → sendPhoto (мапа PNG) / sendMessage, текст — 5 коротких рядків
+    (місце, тип, летить/не летить, ймовірність прольоту, ймовірна ціль), без цитат постів і джерел;
   • без повторів: той самий або нижчий рівень протягом debounce_min (10 хв) не надсилається вдруге;
   • повернення до зеленого (стабільно clear_after_min хв) після тривожного повідомлення → «🟢 Відбій»;
   • секрети TG_BOT_TOKEN / TG_CHAT_ID відсутні → модуль мовчки нічого не робить.
@@ -16,8 +17,6 @@ time.tzset()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CFG_PATH = os.path.join(ROOT, "data", "notify.json")
 LV = {"green": 0, "yellow": 1, "orange": 2, "red": 3}
-HEAD = {2: "🟠 КУРС НА МІСТО", 3: "🔴 НЕБЕЗПЕКА"}
-TYPE_NAMES = {"S": "шахед", "J": "реактивний шахед", "D": "розвідник", "U": "ціль", "C": "крилата ракета", "K": "КАБ", "B": "балістика"}
 TYPE_COLORS = {"S": (242, 201, 76), "J": (255, 140, 26), "D": (180, 190, 200), "U": (242, 201, 76),
                "C": (229, 72, 77), "K": (229, 72, 77), "B": (229, 72, 77)}
 
@@ -75,51 +74,47 @@ def decide(mem, level, now, cfg):
     return None
 
 
+HEAD_ICON = {2: "🟠", 3: "🔴"}
+KIND_SHORT = {"Дрони": "Дрони — Шахед/БпЛА", "drone": "Дрони — Шахед/БпЛА", "missile": "Ракети", "ballistic": "Балістика",
+              "kab": "КАБ", "aircraft": "Авіація"}
+# «летить / не летить» — за полем scope (куди прямує ціль: область / район / місто / ваш район)
+SCOPE_LINE = {"district": "🔴 Летить на ваш район", "city": "➡️ Летить у бік міста",
+              "raion": "↗️ У бік району, не на місто", "oblast": "⬜ Не летить на місто (загроза в області)"}
+
+
+def _threat(st):
+    """Лише тип загрози (без цитат/джерел): «Дрони — Шахед/БпЛА ×2»."""
+    thr = (st.get("thr") or "").strip()
+    if thr and thr != "Загроз немає":
+        name = thr.split(",")[0].strip()
+    else:
+        k = (st.get("kind") or "").strip()
+        name = KIND_SHORT.get(k, k or "Дрони — Шахед/БпЛА")
+    n = sum(int(t.get("n") or 1) for t in (st.get("tgt") or []))
+    return name + (f" ×{n}" if n > 1 else "")
+
+
 def alert_text(st, level, cfg):
+    """Коротко, 5 рядків: місце · тип · летить/не летить · ймовірність прольоту · ймовірна ціль.
+    Без цитат постів, назв каналів, джерел і підпису з часом."""
     place = cfg.get("label") or cfg.get("city")
-    lines = [f"{HEAD.get(level, '⚠️ ЗАГРОЗА')} · {place}"]
-    kind, reason = (st.get("kind") or "").strip(), (st.get("reason") or "").strip()
-    if kind or reason:
-        lines.append(" — ".join(x for x in (kind, reason) if x))
-    if st.get("p_near"):
+    lines = [f"{HEAD_ICON.get(level, '⚠️')} {place}", _threat(st)]
+    sc = st.get("scope") or {3: "district", 2: "city"}.get(level)
+    if sc in SCOPE_LINE:
+        lines.append(SCOPE_LINE[sc])
+    pn = st.get("p_near")
+    if pn is not None:
         eta = st.get("eta", -1)
-        lines.append(f"Ймовірність прольоту поруч за 30 хв: {st['p_near']}%" + (f", ~{eta} хв" if eta is not None and eta >= 0 else ""))
-    sc = st.get("scope")
-    if sc:
-        sp = st.get("scope_p") or {}
-        nm = {"oblast": "область", "raion": "район", "city": "місто", "district": "ваш район"}
-        why = {"post": "за постом каналу", "track": "за прогнозом трекера", "alert": "за офіційною тривогою"}.get(st.get("scope_src"), "")
-        lines.append(f"Курс: {nm.get(sc, sc)}" + (f" ({why})" if why else "") +
-                     ("; прогноз 30 хв: " + ", ".join(f"{nm[k]} {sp[k]}%" for k in ("oblast", "raion", "city", "district") if sp.get(k))
-                      if any(sp.values()) else ""))
+        lines.append(f"Проліт поруч за 30 хв: {pn}%" + (f" (~{eta} хв)" if pn and eta is not None and eta >= 0 else ""))
     if st.get("lt") and st.get("lp"):
-        src = "останні влучання за новинами" if st.get("lsrc") == "news" else "історія маршрутів"
-        lines.append(f"Ймовірна ціль ({src}): {st['lt']} — {st['lp']}%")
-    tg = st.get("tgt") or []
-    if tg:
-        cnt = {}
-        for t in tg:
-            nm = TYPE_NAMES.get(t.get("c"), "ціль")
-            cnt[nm] = cnt.get(nm, 0) + int(t.get("n") or 1)
-        lines.append("На мапі: " + ", ".join(f"{k} ×{v}" for k, v in cnt.items()))
-    if st.get("official"):
-        lines.append("Офіційна тривога в районі: так" + (" (частина громад)" if st.get("official_partial") else ""))
-    txt = (st.get("text") or "").strip().replace("\n", " ")
-    if txt:
-        if len(txt) > 260:
-            txt = txt[:257] + "…"
-        ch = st.get("channel") or ""
-        agree = st.get("agree") or 0
-        lines.append(f"«{txt}»" + (f" — @{ch}" if ch else "") + (f" (+{agree - 1} кан.)" if agree and agree > 1 else ""))
-    lines.append(time.strftime("%H:%M") + " · Дані: JAAM (jaam.net.ua), Telegram-канали · CYD Alert")
+        lines.append(f"Ймовірна ціль: {st['lt']} — {st['lp']}%")
     return "\n".join(lines)
 
 
 def clear_text(cfg, dur_s):
-    place = cfg.get("label") or cfg.get("city")
+    place = (cfg.get("label") or cfg.get("city") or "").split(",")[0].strip()
     d = int(dur_s // 60)
-    return f"🟢 Відбій · {place}\nЗагрозу для вашої адреси знято" + (f" (тривала ~{d} хв)" if d > 0 else "") + \
-        "\n" + time.strftime("%H:%M") + " · CYD Alert"
+    return f"🟢 Відбій · {place}" + (f"\nтривала ~{d} хв" if d > 0 else "")
 
 
 # ------------------------------------------------------------------ мапа PNG

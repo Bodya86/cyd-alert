@@ -49,14 +49,19 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(len(r), 1)
 
     def test_texts(self):
-        st = {"final": "orange", "kind": "Дрони", "reason": "курс на Кременчук", "p_near": 42, "eta": 12, "lt": "Кременчук",
-              "lp": 55, "tgt": [{"c": "S", "la": 49.3, "lo": 33.9, "hd": 250, "n": 2, "pt": [[49.25, 33.8, 5]]}],
+        st = {"final": "orange", "kind": "Дрони", "reason": "шахед, Кременчук, курс", "p_near": 42, "eta": 12, "lt": "Кременчук",
+              "lp": 55, "scope": "city", "scope_src": "post", "thr": "Дрони — Шахед/БпЛА, місто",
+              "tgt": [{"c": "S", "la": 49.3, "lo": 33.9, "hd": 250, "n": 2, "pt": [[49.25, 33.8, 5]]}],
               "official": True, "text": "шахед курсом на Кременчук", "channel": "kremen_sv", "agree": 3}
-        t = tn.alert_text(st, 2, CFG)
-        self.assertIn("КУРС НА МІСТО", t)
-        self.assertIn("шахед ×2", t)
-        self.assertIn("@kremen_sv", t)
-        self.assertIn("Відбій", tn.clear_text(CFG, 1800))
+        cfg = dict(CFG, label="Кременчук, Кременчуцький р-н")
+        t = tn.alert_text(st, 2, cfg)
+        self.assertEqual(t, "🟠 Кременчук, Кременчуцький р-н\nДрони — Шахед/БпЛА ×2\n➡️ Летить у бік міста\n"
+                            "Проліт поруч за 30 хв: 42% (~12 хв)\nЙмовірна ціль: Кременчук — 55%")
+        for bad in ("@", "«", "kremen_sv", "шахед курсом", "Дані", "JAAM", "канал"):
+            self.assertNotIn(bad, t)
+        self.assertIn("Не летить на місто", tn.alert_text(dict(st, scope="oblast"), 2, cfg))
+        self.assertIn("ваш район", tn.alert_text(dict(st, scope=None), 3, cfg))
+        self.assertEqual(tn.clear_text(cfg, 1500), "🟢 Відбій · Кременчук\nтривала ~25 хв")
 
     def test_render(self):
         try:

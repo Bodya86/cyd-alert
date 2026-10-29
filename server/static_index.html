@@ -5,7 +5,7 @@ body{background:#0d1117;color:#e6edf3;font:15px system-ui;margin:0;padding:20px;
 .yellow{border-color:#f2c94c}.orange{border-color:#ff8c1a}.red{border-color:#ff4d4f}body{transition:background .6s}body.Lyellow{background:#1d1a0d}body.Lorange{background:#2a1606}body.Lred{background:#3a0b0d;box-shadow:inset 0 0 0 8px #ff4d4f;min-height:100vh}.mut{color:#8b949e;font-size:13px}
 h1{font-size:22px}select,input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:6px}
 </style><h1>🛡 CYD Alert <span class=mut id=gen></span> <a class=mut href="stats.html" style="color:#58a6ff">📈 точність прогнозів</a></h1>
-<div>Місто <select id=c></select> Район <select id=d></select></div><div id=st></div><div id=tg></div><div id=out></div><div id=ps></div>
+<div>Місто <select id=c></select> Район <select id=d></select></div><div id=st></div><div id=tg></div><div id=out></div>
 <script>
 const L=%LOC%;const c=document.getElementById('c'),d=document.getElementById('d');
 L.cities.forEach(x=>c.add(new Option(x.name,x.id)));c.value='kremenchuk';
@@ -19,13 +19,16 @@ const J=async u=>{for(const b of (RAW?[RAW,'']:[''])){try{const r=await fetch(b+
 const t=s=>s?new Date(s*1000).toLocaleTimeString('uk'):'—';
 async function go(){const q=`city=${c.value}&district=${d.value}`;
  const s=await J(`api/state/${c.value}${d.value?'/'+d.value:''}.json`);
- document.getElementById('gen').textContent='оновлено '+t(s.generated)+' · джерело: '+SRC+' (live.yml щохвилини)';
- document.body.className='L'+s.final;document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Загроза в області',orange:'🟠 Курс на ваше місто',red:'🔴 Небезпека поруч'}[s.final]}</b> (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel}${s.agree>1?' · підтверджують '+s.agree+' канали':''} · ${(s.channels||[]).length} каналів · тривоги: ${s.oblasts_src||'—'}</span></div>`;
+ document.getElementById('gen').textContent='оновлено '+t(s.generated);
+ const SC={district:'🔴 Летить на ваш район',city:'➡️ Летить у бік міста',raion:'↗️ У бік району, не на місто',oblast:'⬜ Не летить на місто (загроза в області)'};
+ const HD={green:'🟢 Чисто',yellow:'🟡 Загроза в області',orange:'🟠 Курс на ваше місто',red:'🔴 Небезпека поруч'}[s.final];
+ const sc=s.final=='green'?'':(SC[s.scope||{red:'district',orange:'city'}[s.final]]||'');
+ const thr=s.final=='green'?'':((s.thr&&s.thr!='Загроз немає')?s.thr.split(',')[0]:(s.kind||'Ціль'));
+ document.body.className='L'+s.final;document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${HD}</b>`+[thr,sc,s.final!='green'&&s.p_near!=null?`Проліт поруч за 30 хв: ${s.p_near}%${s.p_near&&s.eta>=0?' (~'+s.eta+' хв)':''}`:'',s.lt&&s.lp?`Ймовірна ціль: ${s.lt} — ${s.lp}%`:''].filter(Boolean).map(x=>'<br>'+x).join('')+`</div>`;
  const g=await J(`api/targets/${c.value}.json`);const S=g.summary;
  document.getElementById('tg').innerHTML=`<div class=card style="border-color:#58a6ff"><b>🎯 Цілі (${g.targets.length})</b> · P(≤${g.user?g.user.R:15} км, 30 хв): дрони ${Math.round(S.p_drone[30]*100)}%, ракети ${Math.round(S.p_missile[30]*100)}%${S.eta_min!=null?' · ETA '+Math.round(S.eta_min)+' хв':''}<br>`+
-  g.targets.map(x=>`<span class=mut>${x.label}${x.count>1?' ×'+x.count:''} · ${x.dist_km!=null?x.dist_km+' км':'—'} · курс ${x.heading!=null?x.heading+'°':'—'} (${Math.round(x.heading_conf*100)}%) · ${x.speed} км/год · P5/15/30 ${[5,15,30].map(T=>Math.round(x.p[T]*100)).join('/')}% · ETA ${x.eta_min??'—'} · ${x.src.join(',')}</span>`).join('<br>')+`<div class=mut>${g.attribution}</div></div>`;
- const p=await J(`api/posts.json`).catch(()=>s.channel?J(`api/posts/${s.channel}.json`):{posts:[]});
- document.getElementById('ps').innerHTML=p.posts.slice().reverse().map(x=>`<div class="card ${x.level}"><span class=mut>${x.channel?'@'+x.channel+' ':''}#${x.id} · ${t(x.ts)} · бал ${x.score} ${x.ignored?'· реклама':''}${x.clear?'· відбій':''} ${x.reason}</span><br>${x.text}</div>`).join('')}
+  g.targets.map(x=>`<span class=mut>${x.label}${x.count>1?' ×'+x.count:''} · ${x.dist_km!=null?x.dist_km+' км':'—'}${x.eta_min!=null?' · ETA '+x.eta_min+' хв':''}</span>`).join('<br>')+`</div>`;
+}
 const OC=['#2ea043','#5b6573','#f59e0b'];
 async function outg(){const ci=L.cities.find(x=>x.id==c.value);const o=await J(`api/outage/${ci.oblast}/${document.getElementById('g').value}.json`).catch(()=>({days:[],err:'немає джерела для області'}));
  document.getElementById('ob').innerHTML=(o.days||[]).map(dd=>`<div class=mut>${dd.date}</div><div style="display:flex;gap:1px">${[...dd.cells].map(v=>`<span style="flex:1;height:14px;background:${OC[v]}"></span>`).join('')}</div>`).join('')||('— '+(o.err||''));
