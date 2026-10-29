@@ -1,5 +1,5 @@
 {
- "_comment": "Публічні канали з веб-превʼю t.me/s/<id> (перевірено curl 28.10.2026). scope: national — уся Україна (діє правило відстані, без згадки вашого міста/області пост лише інформаційний); oblast — канал області(ей) з oblasts; city — міський канал (home). weight 0..1 — довіра. default — увімкнений за замовчуванням для користувачів своєї області (national — для всіх). Для ESP порядок важливий (бітова маска налаштувань) — нові канали додавайте В КІНЕЦЬ.",
+ "_comment": "Публічні канали з веб-превʼю t.me/s/<id> (перевірено curl 28–29.10.2026). scope: national — уся Україна (діє правило відстані, без згадки вашого міста/області пост лише інформаційний); oblast — канал області(ей) з oblasts; city — міський канал (home). weight 0..1 — довіра. default — увімкнений за замовчуванням для користувачів своєї області (national — для всіх). Для ESP порядок важливий (бітова маска налаштувань) — нові канали додавайте В КІНЕЦЬ.",
  "channels": [
   {
    "id": "kremen_sv",
@@ -278,6 +278,74 @@
    "weight": 0.95,
    "kind": "official",
    "default": true
+  },
+  {
+   "id": "monitoringplt",
+   "name": "Моніторинг Полтавщина",
+   "scope": "oblast",
+   "oblasts": [
+    16
+   ],
+   "home": "poltava",
+   "weight": 0.85,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "monitor_ukr",
+   "name": "Моніторинг | Україна",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.7,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "monitorwarr",
+   "name": "monitoring (балістика)",
+   "scope": "national",
+   "oblasts": [],
+   "home": null,
+   "weight": 0.7,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "cherkasy_monitor",
+   "name": "CHERKASY MONITOR",
+   "scope": "oblast",
+   "oblasts": [
+    24
+   ],
+   "home": "cherkasy",
+   "weight": 0.75,
+   "kind": "monitor",
+   "default": true
+  },
+  {
+   "id": "dnipro_operative",
+   "name": "Дніпро Оперативний",
+   "scope": "oblast",
+   "oblasts": [
+    3
+   ],
+   "home": "dnipro",
+   "weight": 0.5,
+   "kind": "news",
+   "default": false
+  },
+  {
+   "id": "sumy_monitor",
+   "name": "Суми | Моніторинг 24/7",
+   "scope": "oblast",
+   "oblasts": [
+    19
+   ],
+   "home": "sumy",
+   "weight": 0.45,
+   "kind": "monitor",
+   "default": false
   }
  ]
 }

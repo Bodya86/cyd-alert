@@ -36,9 +36,9 @@ def page(ch, before=None):
     return out
 
 
-def collect(ch, days, pages, delay):
-    os.makedirs(RAW, exist_ok=True)
-    fn = os.path.join(RAW, ch + ".jsonl")
+def collect(ch, days, pages, delay, raw=RAW):
+    os.makedirs(raw, exist_ok=True)
+    fn = os.path.join(raw, ch + ".jsonl")
     seen, oldest = set(), None
     if os.path.exists(fn):
         for l in open(fn, encoding="utf-8"):
@@ -81,6 +81,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=120); ap.add_argument("--pages", type=int, default=250)
     ap.add_argument("--delay", type=float, default=0.8); ap.add_argument("ch", nargs="*")
+    ap.add_argument("--dir", default=RAW, help="куди писати (новини — data/history/news_raw)")
+    ap.add_argument("--news", action="store_true", help="канали новин з data/news_sources.json → data/history/news_raw")
     a = ap.parse_args()
-    for ch in a.ch or DEFAULT:
-        collect(ch, a.days, a.pages, a.delay)
+    chs, raw = a.ch or DEFAULT, a.dir
+    if a.news:
+        raw = os.path.join(ROOT, "data", "history", "news_raw")
+        chs = a.ch or [c["id"] for c in json.load(open(os.path.join(ROOT, "data", "news_sources.json"), encoding="utf-8"))["telegram"]]
+    for ch in chs:
+        collect(ch, a.days, a.pages, a.delay, raw)

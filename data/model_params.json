@@ -1,4 +1,34 @@
 {
  "trk_w": 0.3,
- "prior_mix": 0.6
+ "prior_mix": 0.6,
+ "news_beta": 0.0,
+ "news_hl_days": 3.0,
+ "news_backtest": {
+  "scheme": "val = перша половина тестових хвиль, test = друга",
+  "news_items": 7432,
+  "news_events": 3886,
+  "news_cover_from": 1787069015,
+  "val_n": 948,
+  "test_n": 949,
+  "chosen": {
+   "beta": 0.05,
+   "hl_days": 3.0
+  },
+  "val": [
+   0.398,
+   0.612,
+   -2.422
+  ],
+  "test_history_only": {
+   "top1": 0.26,
+   "top3": 0.529,
+   "ll": -2.768
+  },
+  "test_history_plus_news": {
+   "top1": 0.255,
+   "top3": 0.522,
+   "ll": -2.802
+  },
+  "enabled": false
+ }
 }

@@ -253,6 +253,7 @@ static void parseTargets(JsonDocument& doc) {
   }
   strlcpy(g_state.ltName, doc["lt"] | "", sizeof(g_state.ltName));
   g_state.ltP = constrain((int)(doc["lp"] | 0), 0, 100);
+  strlcpy(g_state.thr, doc["thr"] | "", sizeof(g_state.thr));
   JsonObject hm = doc["hm"];
   const char* v = hm["v"] | "";
   int w = hm["w"] | 0, h = hm["h"] | 0;
@@ -314,7 +315,7 @@ static bool applyStatic(JsonDocument& doc, bool& gotOblasts) {
     parseTargets(doc);
   } else {
     g_state.trkLevel = LVL_GREEN; g_state.pNear = g_state.pDrone = g_state.pMissile = g_state.pBallistic = 0;
-    g_state.eta = -1; g_state.ltP = 0;
+    g_state.eta = -1; g_state.ltP = 0; g_state.thr[0] = 0;
   }
   g_state.level = computeFinalLevel(g_state);
   g_state.version++;

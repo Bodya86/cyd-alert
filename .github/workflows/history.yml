@@ -33,6 +33,15 @@ jobs:
           restore-keys: history-raw-
       - name: Collect posts (incremental)
         run: python tools/history_collect.py --days 180 --pages 400 --delay 0.8
+      - name: Restore news archive
+        uses: actions/cache@v4
+        with:
+          path: data/history/news_raw
+          key: news-raw-${{ github.run_id }}
+          restore-keys: news-raw-
+      # новини про влучання (data/news_sources.json → telegram) — для бектесту апріору «ймовірної цілі»
+      - name: Collect news (incremental)
+        run: python tools/history_collect.py --news --days 150 --pages 400 --delay 0.8
       # ваги trk_w / prior_mix: сітка на останніх 60 хвилях; data/model_params.json змінюється лише якщо краще на holdout
       - name: Recalibrate weights
         run: python tools/recalibrate.py --waves 60
@@ -40,6 +49,9 @@ jobs:
         run: |
           python tools/history_model.py --out data/history_model.json
           python -m unittest discover -s server -p "test_history.py"
+      # news_beta > 0 лише якщо новини покращують top-1 і log-likelihood на відкладених хвилях
+      - name: News prior backtest
+        run: python tools/news_backtest.py --write
       - name: Commit if changed
         run: |
           F="data/history_model.json data/model_params.json data/calibration_log.json"

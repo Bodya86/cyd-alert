@@ -385,6 +385,53 @@ class Track:
         return dict(p=p, eta_min=eta, path=path, dist_km=round(math.hypot(mx0 - ux, my0 - uy), 1))
 
 
+    def p_zones(self, zones, H=30.0, step_min=3.0, sub=3):
+        """zones: [[(lat, lon, R_км), ...], ...] — кожна зона як об'єднання кіл (область = кола її районів).
+        → [P(ціль увійде в зону за H хв)] — та сама модель руху, що forecast(), але грубіше (кожна 3-я частинка,
+        крок 3 хв; траєкторії кешуються на ітерацію). Далекі кола відкидаються одразу."""
+        key = (self.t, H, step_min, sub)
+        if getattr(self, "_traj_key", None) != key:
+            rng = self.cfg["rng"]
+            nst, h = int(H / step_min), step_min / 60.0
+            tr = []
+            for q, w in list(zip(self.p, self.w))[::sub]:
+                x, y, hd, v, dist = q
+                pts = [(x, y)]
+                for _ in range(nst):
+                    if not (rng and dist >= rng):
+                        d = v * h
+                        x, y = x + d * math.sin(hd), y + d * math.cos(hd)
+                        dist += d
+                    pts.append((x, y))
+                tr.append((w * sub, pts))
+            self._traj, self._traj_key = tr, key
+            mx, my, *_ = self.mean()
+            self._reach = (mx, my, max(math.hypot(p[-1][0] - p[0][0], p[-1][1] - p[0][1]) + math.hypot(p[0][0] - mx, p[0][1] - my)
+                                      for _, p in tr) if tr else 0.0)
+        mx, my, reach = self._reach
+        out = []
+        for z in zones:
+            circ = [(cx, cy, R) for cx, cy, R in ((*self.proj.xy(la, lo), R) for la, lo, R in z)
+                    if math.hypot(cx - mx, cy - my) <= reach + R]
+            if not circ:
+                out.append(0.0)
+                continue
+            acc = 0.0
+            for w, pts in self._traj:
+                hit = False
+                for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+                    for cx, cy, R in circ:
+                        if seg_point_dist(x0, y0, x1, y1, cx, cy)[0] <= R:
+                            hit = True
+                            break
+                    if hit:
+                        break
+                if hit:
+                    acc += w
+            out.append(round(min(1.0, acc), 3))
+        return out
+
+
 # ---------------- трекер ----------------
 class Tracker:
     def __init__(self, gaz=None, seed=None):
@@ -589,6 +636,32 @@ class Tracker:
         # спершу небезпечні, далі ближчі (щоб при p=0 на мапі були різні цілі, а не перші за часом)
         out.sort(key=lambda d: (-d["p"][30], d["dist_km"] if d["dist_km"] is not None else 9999))
         return out
+
+
+SCOPES = ("oblast", "raion", "city", "district")
+
+
+def scope_probs(trk, zones, now=None, maxkm=260.0):
+    """zones: dict scope → [(lat, lon, R)] (порожній список — зони немає). → dict scope → P(хоч одна ціль увійде за 30 хв).
+    Група з n цілей корельована: 1 − Π(1 − p)^√n (як threat_summary). Лише цілі з траєкторією ≤ maxkm від міста."""
+    now = now or time.time()
+    names = [k for k in SCOPES if zones.get(k)]
+    q = {k: 1.0 for k in names}
+    if not names:
+        return {}
+    c0 = zones.get("city") or zones[names[0]]
+    for tr in trk.tracks:
+        if now - tr.last_obs >= tr.cfg["ttl"]:
+            continue
+        tr.predict_to(max(tr.t, now))
+        x, y, *_ = tr.mean()
+        lat, lon = tr.proj.ll(x, y)
+        if math.hypot(*Proj(c0[0][0], c0[0][1]).xy(lat, lon)) > maxkm:
+            continue
+        ps = tr.p_zones([zones[k] for k in names])
+        for k, p in zip(names, ps):
+            q[k] *= (1 - min(0.99, p)) ** math.sqrt(max(1, min(tr.count, 9)))
+    return {k: round(1 - q[k], 3) for k in names}
 
 
 def threat_summary(targets):

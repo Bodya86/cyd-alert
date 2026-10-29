@@ -547,8 +547,6 @@ static lv_obj_t* s_zoomBox = nullptr;
 static lv_obj_t* s_zoomTag = nullptr;
 static lv_obj_t *s_btnZin = nullptr, *s_btnZout = nullptr, *s_btnZhome = nullptr;
 static RouteHeat s_heat;
-static char s_ltName[28] = {0};
-static uint8_t s_ltP = 0;
 
 static const MapView* viewFor(int z) {
   if (z == 1 && g_set.oblast >= 0 && g_set.oblast < 27 && MAP_OBL_VIEW[g_set.oblast] >= 0) return &MAP_VIEWS[MAP_OBL_VIEW[g_set.oblast]];
@@ -996,9 +994,27 @@ static lv_obj_t* legendRow(lv_obj_t* p, int y, uint32_t c, const char* t, int x 
 }
 
 static void updateMain(bool full);
-static String s_seg[3];
-static uint8_t s_segN = 0, s_segI = 0;
-static uint32_t s_segAt = 0;
+// 4 рядки картки загрози: місце; тип + куди летить; ймовірність прольоту поруч; ймовірна ціль
+static void cardLines(const AppState& s, Level L, String ln[4]) {
+  const CityDef* c = userCity();
+  int me = userRegion();
+  ln[0] = c ? String(c->name) : userPlaceName();
+  if (me >= 0) {
+    String r = MAP_REGIONS[me].name;
+    r.replace(" район", " р-н");
+    ln[0] += ", " + r;
+  }
+  if (L == LVL_GREEN) ln[1] = "Загроз немає";
+  else if (s.thr[0] && strcmp(s.thr, "Загроз немає")) ln[1] = s.thr;
+  else {
+    bool drone = !strcmp(s.tgKind, "Дрони") || !s.tgKind[0];
+    ln[1] = drone ? String("Дрони — Шахед/БпЛА") : String(s.tgKind);
+    ln[1] += L == LVL_RED ? ", ваш район" : L == LVL_ORANGE ? ", місто" : ", область";
+  }
+  int pn = s.pBallistic > s.pNear ? s.pBallistic : s.pNear;
+  ln[2] = s.trkOk ? "Ймовірність прольоту поруч за 30 хв: " + String(pn) + "%" : String("Ймовірність прольоту поруч за 30 хв: —");
+  ln[3] = s.ltName[0] && s.ltP ? "Ймовірна ціль " + String(s.ltName) + " — " + String(s.ltP) + "%" : String("Ймовірна ціль: —");
+}
 
 // пульс лише картки статусу (рамка й смужка), ~2 кадри/с: раніше пульсувала рамка всього екрана й тло
 // на 50 кадрах/с — це щоразу перемальовувало весь екран разом із мапою і гальмувало інтерфейс.
@@ -1237,7 +1253,6 @@ static void updateMain(bool full) {
     s_ntgt = snap.trkOk ? snap.ntgt : 0;
     memcpy(s_tgt, snap.tgt, sizeof(s_tgt));
     s_heat = snap.heat;
-    strlcpy(s_ltName, snap.ltName, sizeof(s_ltName)); s_ltP = snap.trkOk ? snap.ltP : 0;
     lv_obj_invalidate(s_map);
     int cnt = 0;
     if (snap.regionsFine) {
@@ -1254,53 +1269,11 @@ static void updateMain(bool full) {
     Level L = preview ? s_preview : snap.level;
     applyLevelTint(L);
     rebuildPalette();
-    const char* sub;
-    bool off = snap.offLevel > LVL_GREEN;
-    bool tgDrives = snap.tgLevel >= L && snap.tgLevel > LVL_GREEN && snap.tgScore >= 3;
-    bool trkDrives = snap.trkOk && snap.trkLevel >= L && !tgDrives;
-    bool drone = !strcmp(snap.tgKind, "Дрони") || !snap.tgKind[0];
-    if (preview) sub = "тест кольору екрана";
-    else if (L == LVL_RED && trkDrives) sub = snap.pBallistic >= 15 ? "балістика по області" : snap.pMissile > snap.pDrone ? "ракета може пролетіти поруч" : "дрон наближається до вас";
-    else if (L == LVL_RED) sub = tgDrives ? (drone ? "ціль над вашим районом" : snap.tgNear ? "ракети / КАБ поруч" : "ракетна загроза області") : "небезпека поруч";
-    else if (L == LVL_ORANGE && trkDrives) sub = "ціль може пролетіти поруч";
-    else if (L == LVL_ORANGE) sub = tgDrives ? (drone ? "ціль курсом на ваше місто" : "ракети / КАБ в області") : off ? "ракетна тривога в районі" : "загроза наближається";
-    else if (L == LVL_YELLOW) sub = tgDrives ? "дрони в області" : off ? (snap.offPartial ? "тривога в частині району" : (userRegion() >= 0 ? "тривога у вашому районі" : "тривога в області")) : "загроза в області";
-    else {
-      char os = userOblastStatus();
-      sub = !snap.alertsOk ? "немає даних" : (os == 'A' || os == 'P' || os == 'R' || os == 'Y') ? "тривога в області, не у вас" : "тривоги немає";
-    }
-    lv_label_set_text_fmt(s_cardTitle, "%s  ·  %s", levelName(L), sub);
-    String line;
-    String segPred, segTarget;
-    if (snap.tgText[0]) {
-      line = fmtTime(snap.tgTime) + "  " + snap.tgText;
-    } else if (snap.tgOk) {
-      line = String("Telegram: ") + (snap.tgReason[0] ? snap.tgReason : "немає загроз");
-    } else {
-      int n = channelsEnabledCount() + (g_set.channel.length() ? 1 : 0);
-      line = n ? ("Читаю Telegram-канали (" + String(n) + ")…") : String("Telegram-канали вимкнено (Налаштування)");
-    }
-    if (snap.trkOk && (snap.ntgt || snap.pNear || snap.pBallistic)) {
-      char pre[64];
-      int pn = snap.pBallistic > snap.pNear ? snap.pBallistic : snap.pNear;
-      if (snap.eta >= 0) snprintf(pre, sizeof(pre), "P(близько) %d%% · ETA %d хв  ·  ", pn, snap.eta);
-      else snprintf(pre, sizeof(pre), "P(близько) %d%% · цілей %d  ·  ", pn, snap.ntgt);
-      segPred = pre;
-      segPred.replace("  ·  ", "");
-    }
-    if (s_ltP >= 5 && s_ltName[0]) {
-      char pre[64];
-      snprintf(pre, sizeof(pre), "ймовірна ціль: %s %d%%", s_ltName, s_ltP);
-      segTarget = pre;
-    }
-    // частини по черзі: прогноз → ймовірна ціль → текст поста
-    s_segN = 0;
-    if (segPred.length()) s_seg[s_segN++] = segPred;
-    if (segTarget.length()) s_seg[s_segN++] = segTarget;
-    s_seg[s_segN++] = line;
-    if (s_segI >= s_segN) s_segI = 0;
-    s_segAt = millis();
-    lv_label_set_text(s_cardText, s_seg[s_segI].c_str());
+    String ln[4];
+    cardLines(snap, L, ln);
+    // картка: статично 2 з 4 рядків (тип + куди; ймовірність поруч або ймовірна ціль), повністю — у «Деталях»
+    lv_label_set_text(s_cardTitle, preview ? "Тест кольору екрана" : ln[1].c_str());
+    lv_label_set_text(s_cardText, (L > LVL_GREEN && snap.trkOk ? ln[2] : ln[3]).c_str());
   }
   autoZoom(snap);
   // графік відключень: щохвилини (зміна півгодинки) або при оновленні даних
@@ -1328,12 +1301,6 @@ static void updateMain(bool full) {
     }
     if (changed || cur != OUT_NONE) lv_obj_invalidate(s_outBar);
   }
-  // текст картки: частини по черзі раз на 4 с — без анімації прокрутки
-  if (s_segN > 1 && millis() - s_segAt > 4000) {
-    s_segAt = millis();
-    s_segI = (s_segI + 1) % s_segN;
-    lv_label_set_text(s_cardText, s_seg[s_segI].c_str());
-  }
 }
 
 // ------------------------------- Деталі -------------------------------
@@ -1353,55 +1320,13 @@ static void showDetail() {
   lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_row(cont, 6, 0);
   static AppState s; stateLock(); s = g_state; stateUnlock();   // static: AppState завеликий для стеку
-  char os = userOblastStatus();
-  const char* osTxt = os == 'A' || os == 'R' ? "тривога" : os == 'Y' ? "попередня загроза" : os == 'P' ? "часткова тривога" : os == 'N' ? "тривоги немає" : "невідомо";
-  int me = userRegion();
-  const char* offTxt = s.offLevel >= LVL_ORANGE ? "ракети / КАБ" : s.offLevel == LVL_YELLOW ? (s.regionsFine ? "дрони / тип невідомий" : "тривога (тип невідомий)") : "тривоги немає";
-  static const char* lvlTxt[4] = {"Чисто", "Загроза в області", "Курс на ваше місто", "Небезпека поруч"};
-  String t1 = String(s.level == LVL_GREEN ? LV_SYMBOL_OK " " : LV_SYMBOL_WARNING " ") + lvlTxt[s.level];
-  lv_obj_t* l = mkLabel(cont, t1.c_str(), &font_ua_26, levelColor(s.level));
-  String t2 = userPlaceName();
-  if (me >= 0) t2 += String("\n") + MAP_REGIONS[me].name + ": " + offTxt + (s.offPartial ? " (частково)" : "");
-  t2 += String("\nОбласть: ") + osTxt + "  (" + s.alertsSrc + (s.regionsFine ? ", по районах" : ", по областях") + ")";
-  l = mkLabel(cont, t2.c_str(), &font_ua_14, C_TEXT);
-  lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-  String ch = s.tgChan[0] ? String(s.tgChan) : String("—");
-  String t3 = String("Telegram ") + s.tgNok + "/" + s.tgNch + " каналів, головне @" + ch + " (" + s.tgSrc +
-              (s.tgAgree >= 2 ? String(", підтверджують ") + s.tgAgree : String()) + "): " + levelName(s.tgLevel) +
-              (s.tgKind[0] ? String(" / ") + s.tgKind : String()) + ", бал " + s.tgScore + (s.tgNear ? ", поруч" : "") +
-              (s.tgReason[0] ? String("\nПричини: ") + s.tgReason : String());
-  l = mkLabel(cont, t3.c_str(), &font_ua_12, C_MUTED);
-  lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-  if (s.tgText[0]) {
-    lv_obj_t* box = lv_obj_create(cont);
-    lv_obj_set_width(box, 300); lv_obj_set_height(box, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(box, col(C_PANEL), 0);
-    lv_obj_set_style_border_width(box, 0, 0);
-    lv_obj_set_style_radius(box, 10, 0);
-    String t4 = fmtTime(s.tgTime) + "  " + s.tgText;
-    l = mkLabel(box, t4.c_str(), &font_ua_14, C_TEXT);
-    lv_obj_set_width(l, 276); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-  }
-  {  // легенда кольорів цілей на мапі
-    lv_obj_t* lg = lv_obj_create(cont);
-    lv_obj_remove_style_all(lg);
-    lv_obj_set_size(lg, 300, 48);
-    lv_obj_clear_flag(lg, LV_OBJ_FLAG_SCROLLABLE);
-    legendRow(lg, 0, TC_DRONE, "дрони (шахед)", 0);
-    legendRow(lg, 0, TC_MISSILE, "ракети / КАБ", 150);
-    legendRow(lg, 16, TC_BALL, "балістика", 0);
-    legendRow(lg, 16, TC_OTHER, "інше / невідомо", 150);
-    legendRow(lg, 32, TC_COURSE, "курс — білий пунктир", 0);
-  }
-  {
-    uint32_t age = s.alertsAt ? (millis() - s.alertsAt) / 1000 : 0;
-    char src[160];
-    snprintf(src, sizeof(src), "Джерело тривог: %s, оновлено %lu с тому.\nДані: JAAM (jaam.net.ua) · alerts.in.ua · Telegram-канали", s.alertsSrc, (unsigned long)age);
-    l = mkLabel(cont, src, &font_ua_12, C_MUTED);
+  String ln[4];
+  cardLines(s, s.level, ln);
+  lv_obj_set_style_pad_row(cont, 10, 0);
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t* l = mkLabel(cont, ln[i].c_str(), i == 1 ? &font_ua_18 : &font_ua_14, i == 1 ? levelColor(s.level) : C_TEXT);
     lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
   }
-  l = mkLabel(cont, "Аналіз автоматичний (ключові слова) і може помилятися. Завжди дійте за офіційними сигналами тривоги.", &font_ua_12, 0x5C6773);
-  lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
   loadScreen(scr);
 }
 

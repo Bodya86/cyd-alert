@@ -528,7 +528,7 @@ static const WordList OBLAST_KW[OBLAST_COUNT] = {
   {nullptr, 0},
   {KW_207, 4},
 };
-#define CHANNEL_COUNT 24
+#define CHANNEL_COUNT 30
 static const ChannelDef CHANNELS[CHANNEL_COUNT] = {
   {"kremen_sv", "Кременчуцький Миколай", 2, 65536u, "kremenchuk", 90, 1},
   {"ppo_poltava", "ППО Полтавщина: Нічні мисливці", 1, 65536u, "", 75, 1},
@@ -554,6 +554,12 @@ static const ChannelDef CHANNELS[CHANNEL_COUNT] = {
   {"Sumy_news_ODA", "Сумська ОВА", 1, 524288u, "sumy", 95, 1},
   {"chernigivskaODA", "Чернігівська ОВА", 1, 67108864u, "chernihiv", 95, 1},
   {"zhytomyrskaODA", "Житомирська ОВА", 1, 32u, "zhytomyr", 95, 1},
+  {"monitoringplt", "Моніторинг Полтавщина", 1, 65536u, "poltava", 85, 1},
+  {"monitor_ukr", "Моніторинг | Україна", 0, 0u, "", 70, 1},
+  {"monitorwarr", "monitoring (балістика)", 0, 0u, "", 70, 1},
+  {"cherkasy_monitor", "CHERKASY MONITOR", 1, 16777216u, "cherkasy", 75, 1},
+  {"dnipro_operative", "Дніпро Оперативний", 1, 8u, "dnipro", 50, 0},
+  {"sumy_monitor", "Суми | Моніторинг 24/7", 1, 524288u, "sumy", 45, 0},
 };
 
 #define OUTAGE_GROUP_COUNT 12

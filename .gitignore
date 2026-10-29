@@ -12,3 +12,4 @@ test/host/cases_gen.h
 .env
 data/history/raw/
 dist/
+data/history/news_raw/

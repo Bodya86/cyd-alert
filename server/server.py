@@ -53,6 +53,14 @@ jaam = jaam_ws.JaamState()
 trk = tk.Tracker()
 HIST = None if os.environ.get("NO_HISTORY") else history.History.load()
 trk.history = HIST
+REGION_GEO = json.load(open(os.path.join(al.DATA, "region_geo.json"), encoding="utf-8"))
+CITY_R_KM, DISTRICT_R_KM = 8.0, 3.0
+NEWS_EVENTS = []          # news.NewsHits.events() — оновлює live.py (лише інформація, на рівень не впливає)
+SCOPE_TXT = {"oblast": "область", "raion": "район", "city": "місто", "district": "ваш район"}
+SCOPE_LVL = {"oblast": an.YELLOW, "raion": an.YELLOW, "city": an.ORANGE, "district": an.RED}
+SCOPE_MIN_P = {"oblast": 0.3, "raion": 0.25, "city": 0.15, "district": 0.3}
+KIND_TXT = {"drone": "Дрони — Шахед/БпЛА", "missile": "Ракети", "ballistic": "Балістика", "kab": "КАБ",
+            "aircraft": "Авіація", "generic": "Ціль"}
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
@@ -273,6 +281,37 @@ def assess(q):
     return tg, tk.threat_summary(tg), (lat, lon, R)
 
 
+def zones_for(q):
+    """Зони користувача для «куди летить»: область (кола її районів), район, місто, ваш район міста."""
+    lat, lon, cdef = user_point(q)
+    if lat is None or not cdef:
+        return {}
+    ob = cdef.get("oblast", -1)
+    reg = CITY_REGIONS.get(cdef["id"])
+    z = {"oblast": [tuple(REGION_GEO[i]) for i, r in enumerate(al.REGIONS) if r.get("oblast") == ob and i < len(REGION_GEO)],
+         "raion": [tuple(REGION_GEO[reg])] if reg is not None and 0 <= reg < len(REGION_GEO) else [],
+         "city": [(cdef["lat"], cdef["lon"], CITY_R_KM)],
+         "district": [(lat, lon, DISTRICT_R_KM)] if q.get("district") else []}
+    return z
+
+
+def scope_of(q, ev, lvl, rs_off, obl_alert, sp):
+    """Найвужча зона, куди (ймовірно) летить ціль: пост (свіжий, рівень > зелений) або трекер (P ≥ поріг);
+    без них — офіційна тривога в районі/області. → код ("" — немає загрози)."""
+    order = ("district", "city", "raion", "oblast")
+    cand = set()
+    if lvl > an.GREEN and ev.scope:
+        cand.add(ev.scope)
+    for k, p in (sp or {}).items():
+        if p >= SCOPE_MIN_P[k]:
+            cand.add(k)
+    if not cand and rs_off:
+        cand.add("raion")
+    if not cand and obl_alert:
+        cand.add("oblast")
+    return next((k for k in order if k in cand), "")
+
+
 def targets_api(q):
     tg, summ, u = assess(q)
     _, _, upd = jaam.snapshot()
@@ -403,8 +442,22 @@ def state(q):
     lvl = an.cap_level(lvl, obl_alert, ev.explicit)
     final = max(off_lvl, lvl) if official else (lvl if ev.score >= 5 else an.GREEN)
     tg, summ, _ = assess(q)
-    tlvl = an.cap_level(summ["level"], obl_alert, False)   # прогноз трекера без тривоги в області — не вище жовтого
+    zones = zones_for(q)
+    with trk_lock:
+        sp = tk.scope_probs(trk, zones) if zones else {}
+    # зона → рівень: область/район — жовтий, місто — помаранчевий, ваш район — червоний (дрони);
+    # ракети (p_missile) — як раніше. Обрано район міста → червоний від дронів лише при P(ваш район) ≥ порогу.
+    t_raw = summ["level"]
+    if q.get("district") and t_raw >= an.RED and summ["p_missile"][30] < 0.10 and sp.get("district", 0) < SCOPE_MIN_P["district"]:
+        t_raw = an.ORANGE
+    for k, p in sp.items():
+        if obl_alert and p >= SCOPE_MIN_P[k]:   # без тривоги в області зона рівень не піднімає взагалі
+            t_raw = max(t_raw, SCOPE_LVL[k])
+    tlvl = an.cap_level(t_raw, obl_alert, False)   # прогноз трекера без тривоги в області — не вище жовтого
     final = max(final, tlvl)
+    scope = scope_of(q, ev, lvl, official, obl_alert, sp) if final > an.GREEN else ""
+    scope_src = ("post" if lvl > an.GREEN and ev.scope == scope else
+                 "track" if sp.get(scope, 0) >= SCOPE_MIN_P.get(scope, 1) else "alert") if scope else ""
     compact = []
     kept = []
     for d in tg[:12]:
@@ -426,6 +479,23 @@ def state(q):
         if d.get("likely"):
             lt, lp = d["likely"]["name"], round(d["likely"]["p"] * 100)
             break
+    # тип загрози + зона (рядок 2 на екрані): «Дрони — Шахед/БпЛА, місто»
+    kind = ev.threat if (lvl > an.GREEN and ev.threat) else ""
+    if not kind and tg and final > an.GREEN:
+        d0 = tg[0]
+        kind = d0["type"] if d0["type"] in KIND_TXT else ("drone" if d0["cls"] == "drone" else "missile")
+    if not kind and final > an.GREEN:
+        kind = "missile" if off_lvl >= an.ORANGE else "drone"
+    thr = (KIND_TXT.get(kind, "Ціль") + (", " + SCOPE_TXT[scope] if scope else "")) if final > an.GREEN else "Загроз немає"
+    # новини про влучання — лише інформація: де б'ють останнім часом (рівень НЕ змінюють)
+    nw = None
+    ulat0, ulon0, _ = user_point(q)
+    if NEWS_EVENTS and ulat0 is not None:
+        import news as _news
+        nw = _news.summary(NEWS_EVENTS, ulat0, ulon0, oblast)
+    lsrc = "track" if lt else ""
+    if not lt and nw and nw["top"] and nw["obl7"] >= 3:
+        lt, lp, lsrc = nw["top"][0][0], nw["top"][0][1], "news"
     hm = None
     if HIST is not None and q.get("hm", "1") != "0":
         ulat, ulon, _ = user_point(q)
@@ -468,6 +538,12 @@ def state(q):
         "tgt": compact,
         "lt": lt,
         "lp": lp,
+        "lsrc": lsrc,
+        "scope": scope,
+        "scope_src": scope_src,
+        "scope_p": {k: round(v * 100) for k, v in sp.items()},
+        "thr": thr,
+        "news": nw,
         "hm": hm,
         "ballistic": round(max([d["p"][5] for d in balli], default=0) * 100),
     }

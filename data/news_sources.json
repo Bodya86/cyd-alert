@@ -1,0 +1,27 @@
+{
+ "_comment": "Джерела новин про влучання/вибухи (лише для апріорі «ймовірна ціль», рівень тривоги НЕ підвищують). telegram — публічні канали t.me/s/<id>; rss — стрічки сайтів; reuse_kinds — також беремо пости каналів data/channels.json цих типів (ОВА, монітори) з основного циклу. weight 0..1 — довіра джерелу. Перевірено 29.10.2026.",
+ "half_life_days": 10,
+ "keep_days": 30,
+ "refresh_s": 300,
+ "reuse_kinds": ["official", "monitor", "news"],
+ "telegram": [
+  {"id": "suspilnenews", "name": "Суспільне Новини", "weight": 0.9},
+  {"id": "suspilnepoltava", "name": "Суспільне Полтава", "weight": 0.9, "oblast": 16},
+  {"id": "suspilnecherkasy", "name": "Суспільне Черкаси", "weight": 0.9, "oblast": 24},
+  {"id": "suspilnekropyvnytskyi", "name": "Суспільне Кропивницький", "weight": 0.9, "oblast": 11},
+  {"id": "suspilnesumy", "name": "Суспільне Суми", "weight": 0.9, "oblast": 19},
+  {"id": "ukrpravda_news", "name": "Українська правда", "weight": 0.85},
+  {"id": "UkraineNow", "name": "Ukraine NOW", "weight": 0.6},
+  {"id": "kharkivoda", "name": "Харківська ОВА", "weight": 0.95, "oblast": 21}
+ ],
+ "rss": [
+  {"id": "suspilne", "name": "Суспільне", "url": "https://suspilne.media/rss/all.rss", "weight": 0.9},
+  {"id": "pravda", "name": "Українська правда", "url": "https://www.pravda.com.ua/rss/view_news/", "weight": 0.85},
+  {"id": "ukrinform", "name": "Укрінформ", "url": "https://www.ukrinform.ua/rss/block-lastnews", "weight": 0.85},
+  {"id": "unian", "name": "УНІАН", "url": "https://rss.unian.net/site/news_ukr.rss", "weight": 0.75},
+  {"id": "telegraf_kr", "name": "Телеграф (Кременчук)", "url": "https://www.telegraf.in.ua/feed/", "weight": 0.75, "oblast": 16},
+  {"id": "kremenchuk_tv", "name": "Кременчук ТБ", "url": "https://kremenchuk.tv/feed/", "weight": 0.7, "oblast": 16},
+  {"id": "kremen_today", "name": "Кременчук Today", "url": "https://kremen.today/feed/", "weight": 0.7, "oblast": 16},
+  {"id": "poltava_to", "name": "Полтавщина (poltava.to)", "url": "https://poltava.to/rss/news.xml", "weight": 0.75, "oblast": 16}
+ ]
+}

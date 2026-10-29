@@ -74,6 +74,9 @@ class History:
                 break
         return math.radians(k * 45 + rnd.gauss(0, 17)) % (2 * math.pi)
 
+    news_scores = {}       # вузол → Σ conf·0.5^(вік/hl) (news.node_scores), оновлює live.py
+    news_beta = 0.0
+
     def p_target(self, lat, lon, hd=None, maxkm=350):
         c = self.cell(lat, lon)
         w = {}
@@ -91,6 +94,8 @@ class History:
             v = (1 + n[3] + n[4]) ** self.gamma * math.exp(-d / self.lam) * self.base + w.get(k, 0)
             if hd is not None:
                 v *= math.exp(2.0 * (math.cos(math.radians(_bearing(lat, lon, n[1], n[2]) - hd)) - 1))
+            if self.news_beta and k in self.news_scores:      # апріор новин про влучання (вмикає бектест)
+                v *= 1 + self.news_beta * self.news_scores[k]
             out[k] = v
         s = sum(out.values()) or 1
         return {k: v / s for k, v in out.items()}

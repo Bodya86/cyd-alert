@@ -84,8 +84,17 @@ def alert_text(st, level, cfg):
     if st.get("p_near"):
         eta = st.get("eta", -1)
         lines.append(f"Ймовірність прольоту поруч за 30 хв: {st['p_near']}%" + (f", ~{eta} хв" if eta is not None and eta >= 0 else ""))
+    sc = st.get("scope")
+    if sc:
+        sp = st.get("scope_p") or {}
+        nm = {"oblast": "область", "raion": "район", "city": "місто", "district": "ваш район"}
+        why = {"post": "за постом каналу", "track": "за прогнозом трекера", "alert": "за офіційною тривогою"}.get(st.get("scope_src"), "")
+        lines.append(f"Курс: {nm.get(sc, sc)}" + (f" ({why})" if why else "") +
+                     ("; прогноз 30 хв: " + ", ".join(f"{nm[k]} {sp[k]}%" for k in ("oblast", "raion", "city", "district") if sp.get(k))
+                      if any(sp.values()) else ""))
     if st.get("lt") and st.get("lp"):
-        lines.append(f"Ймовірна ціль (історія маршрутів): {st['lt']} — {st['lp']}%")
+        src = "останні влучання за новинами" if st.get("lsrc") == "news" else "історія маршрутів"
+        lines.append(f"Ймовірна ціль ({src}): {st['lt']} — {st['lp']}%")
     tg = st.get("tgt") or []
     if tg:
         cnt = {}

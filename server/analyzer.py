@@ -160,6 +160,7 @@ class PostEval:
     prox: int = 0              # 0 — область/загально, 1 — місто/курс на місто/поруч, 2 — ваш район/над вами
     explicit: bool = False     # пост прямо про ваше місто/район/≤15 км (або балістика на область) — може дати
                                # помаранчевий/червоний і БЕЗ офіційної тривоги; інакше без тривоги — не вище жовтого
+    scope: str = ""            # куди саме: "oblast" / "raion" / "city" / "district" (ваш район міста) / "" — невідомо
     reasons: list = field(default_factory=list)
 
     @property
@@ -278,6 +279,14 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
         ev.place = "oblast"
     elif places:
         ev.place = places[0][0]["n"]
+    if dist_bonus == 4:
+        ev.scope = "district"
+    elif in_city or dist_bonus or settl_bonus >= 2:
+        ev.scope = "city"
+    elif raion_hit or settl_bonus >= 1 or near_place:     # населений пункт ≤ 45 км — район; далі (Полтава, Миргород) — ні
+        ev.scope = "raion"
+    elif obl_hit:
+        ev.scope = "oblast"
     unknown_dir = bool(_any(t, RULES.get("unknown_dir", [])))
     ev.relevant = threat_w > 0 or in_city or settl_bonus > 0 or approach or unknown_dir
     if not ev.relevant and not ev.clear:
@@ -333,6 +342,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
             and (not remote or obl_hit or in_city):
         score = max(score, 6)
         ev.oblast_wide = True
+        ev.scope = ev.scope or "oblast"
         ev.reasons.append("напрямок невідомий — вся область")
     ev.score = score
     ev.near = score >= 7

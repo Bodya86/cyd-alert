@@ -23,6 +23,7 @@ import tracker as tk          # noqa: E402
 import jaam_ws                # noqa: E402
 import tg_notify              # noqa: E402
 import accuracy               # noqa: E402
+import news                   # noqa: E402
 
 log = bs.log
 
@@ -80,6 +81,44 @@ class Publisher:
         return False
 
 
+class NewsLoop:
+    """Новини про влучання: окремий потік (RSS + Telegram-новини раз на 5 хв) + пости моніторів/ОВА з основного циклу.
+    Лише інформація («ймовірна ціль», state.news) — на рівень тривоги не впливає. Набір → out/api/news/hits.json."""
+
+    def __init__(self, out):
+        self.path = os.path.join(out, "api", "news", "hits.json")
+        self.feed = news.NewsFeed(log=log)
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                self.feed.hits.load_json(json.load(f))
+        except (OSError, ValueError):
+            pass
+        self.prm = news.load_params()
+        self.cfg_by_id = {c["id"].lower(): c for c in srv.an.CHANNELS_CFG}
+        self.saved_n = -1
+        log(f"news: {len(self.feed.hits.items)} записів з попереднього запуску, beta={self.prm[0]}")
+        self.feed.start()
+
+    def tick(self):
+        self.feed.ingest_channels(srv.channels, self.cfg_by_id)
+        self.feed.hits.prune()
+        ev = self.feed.hits.events()
+        srv.NEWS_EVENTS = ev
+        beta, hl = self.prm
+        if srv.HIST is not None:
+            srv.HIST.news_beta = beta
+            srv.HIST.news_scores = news.node_scores(ev, srv.HIST.nodes, time.time(), hl) if beta else {}
+        n = len(self.feed.hits.items)
+        if n != self.saved_n:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({**self.feed.hits.to_json(), "status": self.feed.status, "at": int(self.feed.at)},
+                          f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, self.path)
+            self.saved_n = n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="public")
@@ -112,6 +151,11 @@ def main():
     acc = accuracy.AccuracyLog(out)
     pub = Publisher(out, a.branch) if a.push else None
     chans = bs.all_channels()
+    try:
+        nl = NewsLoop(out)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        nl = None
     last_out, it = 0.0, 0
     while time.time() < deadline:
         t0 = time.time()
@@ -126,6 +170,11 @@ def main():
             log("alerts error:", e)
         try:
             bs.fetch_all_channels(chans)
+            if nl:
+                try:
+                    nl.tick()
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
             do_out = time.time() - last_out > a.outage_every
             bs._written.update(n=0, skipped=0)
             bs.write_outputs(out, state_path, chans, do_outage=do_out, next_in=int(a.interval))
