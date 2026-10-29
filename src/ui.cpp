@@ -42,6 +42,8 @@ LV_FONT_DECLARE(font_ua_40)
 #define C_OUT_ON  0x2EA043   // світло є
 #define C_OUT_OFF 0x5B6573   // світла немає
 #define C_OUT_MB  0xF59E0B   // можливе відключення
+#define C_TXT_ON  0x34C759   // текст статусу: світло є (зелений)
+#define C_TXT_OFF 0xFF3B30   // текст статусу: світла немає (червоний)
 
 static lv_color_t col(uint32_t h) { return lv_color_hex(h); }
 static uint32_t levelColor(Level l) {
@@ -1318,7 +1320,7 @@ static void updateMain(bool full) {
       lv_label_set_text(s_outTime, g_set.outGroup < 0 && g_set.outMode == OUT_MODE_AUTO ? "черга?" : (s_out.at ? "немає" : "…"));
     } else {
       static const char* st[] = {LV_SYMBOL_CHARGE " Світло є", LV_SYMBOL_CHARGE " Вимкнено", LV_SYMBOL_CHARGE " Можливо"};
-      static const uint32_t sc[] = {C_OUT_ON, 0xB8C2CC, C_OUT_MB};
+      static const uint32_t sc[] = {C_TXT_ON, C_TXT_OFF, C_OUT_MB};
       lv_label_set_text(s_outState, st[cur]);
       lv_obj_set_style_text_color(s_outState, col(sc[cur]), 0);
       if (at) lv_label_set_text_fmt(s_outTime, "до %s", fmtTime(at).c_str());
@@ -1692,7 +1694,7 @@ static void outageFill() {
   else if (g_set.outMode == OUT_MODE_AUTO && g_set.outGroup < 0) t = "Оберіть свою чергу " LV_SYMBOL_SETTINGS;
   else if (cur == OUT_NONE) t = s_out.err[0] ? String("Немає даних: ") + s_out.err : String("Графік ще не оприлюднено");
   else {
-    static const char* nm[] = {"Світло є", "Світла немає", "Можливе відключення"};
+    static const char* nm[] = {"#34C759 Світло є#", "#FF3B30 Світла немає#", "#F59E0B Можливе відключення#"};
     t = nm[cur];
     if (at) t += String(" до ") + fmtTime(at) + (nv == OUT_OFF ? " (далі відключення)" : nv == OUT_ON ? " (далі буде світло)" : nv == OUT_MAYBE ? " (далі можливе)" : "");
     else t += " до кінця графіка";
@@ -1741,6 +1743,7 @@ static void showOutage() {
     if (i == 0) { lv_obj_add_flag(s_dayBar[i], LV_OBJ_FLAG_CLICKABLE); lv_obj_add_event_cb(s_dayBar[i], dayBarClickCb, LV_EVENT_CLICKED, nullptr); }
   }
   s_outSum = mkLabel(scr, "", &font_ua_14, C_TEXT);
+  lv_label_set_recolor(s_outSum, true);   // статус кольором: червоний/зелений/жовтий
   lv_obj_set_width(s_outSum, 300); lv_label_set_long_mode(s_outSum, LV_LABEL_LONG_WRAP);
   lv_obj_set_pos(s_outSum, 10, 144);
   legendRow(scr, 194, C_OUT_ON, "світло є", 10);
