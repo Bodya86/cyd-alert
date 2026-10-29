@@ -536,10 +536,12 @@ static void rebuildPalette() {
 extern const MapView MAP_VIEW_UA;
 static const MapView* s_view = &MAP_VIEW_UA;
 static uint8_t s_zoom = 0;
-static uint32_t s_manualZoomAt = 0;      // ручний зум — автозум мовчить 3 хв
+static uint32_t s_manualZoomAt = 0;      // натиснуто кнопку зуму — автозум мовчить 5 хв
+#define MANUAL_ZOOM_HOLD_MS 300000UL
 static uint32_t s_autoHoldAt = 0;        // коли востаннє була причина тримати наближення
 static lv_obj_t* s_zoomBox = nullptr;
 static lv_obj_t* s_zoomTag = nullptr;
+static lv_obj_t *s_btnZin = nullptr, *s_btnZout = nullptr, *s_btnZhome = nullptr;
 static RouteHeat s_heat;
 static char s_ltName[28] = {0};
 static uint8_t s_ltP = 0;
@@ -552,6 +554,29 @@ static const MapView* viewFor(int z) {
       if (!strcmp(MAP_CITY_VIEWS[i].city, c->id)) return &MAP_VIEWS[MAP_CITY_VIEWS[i].view];
   }
   return z == 0 ? &MAP_VIEW_UA : nullptr;
+}
+
+// підпис поточного рівня: «Україна» / «Полтавська» / «Кременчуцький р-н»
+static const char* zoomName(int z) {
+  static char buf[48];
+  if (z == 1 && g_set.oblast >= 0 && g_set.oblast < OBLAST_COUNT) {
+    snprintf(buf, sizeof(buf), "%s", OBLASTS[g_set.oblast].name);
+    char* p = strstr(buf, " обл.");
+    if (p) *p = 0;
+    return buf;
+  }
+  if (z == 2) {
+    const CityDef* c = userCity();
+    if (c && c->region >= 0 && c->region < MAP_REGION_COUNT) {
+      snprintf(buf, sizeof(buf), "%s", MAP_REGIONS[c->region].name);
+      char* p = strstr(buf, " район");
+      if (p) strcpy(p, " р-н");
+      return buf;
+    }
+    if (c) { snprintf(buf, sizeof(buf), "%s ±75 км", c->name); return buf; }
+    return "Район";
+  }
+  return z == 0 ? "Україна" : "Область";
 }
 
 static inline float vx(const MapView* v, float lon) { return (lon * MAP_PROJ_COSLAT - v->minx) * v->scale + v->offx; }
@@ -844,6 +869,20 @@ static void zoomAnimCb(void* o, int32_t v) {
 }
 static void zoomAnimDone(lv_anim_t* a) { lv_obj_add_flag((lv_obj_t*)a->var, LV_OBJ_FLAG_HIDDEN); }
 
+static int nextZoom(int dir) {          // наступний доступний рівень (без міста — лише Україна ↔ область)
+  for (int z = s_zoom + dir; z >= 0 && z <= 2; z += dir) if (viewFor(z)) return z;
+  return -1;
+}
+static void zoomBtnState(lv_obj_t* b, bool on) {
+  if (!b) return;
+  if (on) lv_obj_clear_state(b, LV_STATE_DISABLED); else lv_obj_add_state(b, LV_STATE_DISABLED);
+}
+static void updateZoomBtns() {
+  zoomBtnState(s_btnZin, nextZoom(+1) >= 0);
+  zoomBtnState(s_btnZout, nextZoom(-1) >= 0);
+  zoomBtnState(s_btnZhome, s_zoom != 0);
+}
+
 static void setZoom(int z, bool anim) {
   const MapView* nv = viewFor(z);
   if (!nv || !s_map || (z == s_zoom && nv == s_view)) return;
@@ -859,10 +898,8 @@ static void setZoom(int z, bool anim) {
   s_zoom = z; s_view = nv;
   placeMarker();
   lv_obj_invalidate(s_map);
-  if (s_zoomTag) {
-    static const char* ZT[3] = {"Україна", "Область", "Район"};
-    lv_label_set_text(s_zoomTag, ZT[z]);
-  }
+  if (s_zoomTag) lv_label_set_text(s_zoomTag, zoomName(z));
+  updateZoomBtns();
   if (anim && s_zoomBox) {
     lv_obj_clear_flag(s_zoomBox, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_zoomBox);
@@ -877,20 +914,43 @@ static void setZoom(int z, bool anim) {
   }
 }
 
-static void mapClickCb(lv_event_t*) {
-  int z = s_zoom;
-  for (int i = 0; i < 3; i++) {          // наступний доступний вид (без міста — лише Україна ↔ область)
-    z = (z + 1) % 3;
-    if (viewFor(z)) break;
-  }
+// кнопки «+» / «−» / «⌂» у кутку мапи (тап по самій мапі зум не змінює)
+static void zoomBtnCb(lv_event_t* e) {
+  int act = (int)(intptr_t)lv_event_get_user_data(e);   // +1, -1, 0 — уся Україна
+  int z = act == 0 ? 0 : nextZoom(act);
   s_manualZoomAt = millis() | 1;
-  setZoom(z, true);
+  s_autoHoldAt = 0;
+  if (z >= 0) setZoom(z, true);
+}
+static lv_obj_t* mkZoomBtn(lv_obj_t* p, const char* sym, int act, int x, int y) {
+  lv_obj_t* b = lv_btn_create(p);
+  lv_obj_set_size(b, 36, 36);
+  lv_obj_set_pos(b, x, y);
+  lv_obj_set_style_radius(b, 8, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_set_style_bg_color(b, col(C_BG), 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
+  lv_obj_set_style_border_color(b, col(C_BORDER), 0);
+  lv_obj_set_style_border_width(b, 1, 0);
+  lv_obj_set_style_border_opa(b, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(b, col(C_PANEL2), LV_STATE_PRESSED);
+  lv_obj_set_style_bg_opa(b, LV_OPA_90, LV_STATE_PRESSED);
+  lv_obj_set_style_border_color(b, col(C_ACCENT), LV_STATE_PRESSED);
+  lv_obj_set_style_bg_color(b, col(C_BG), LV_STATE_DISABLED);
+  lv_obj_set_style_bg_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+  lv_obj_set_style_text_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+  lv_obj_set_ext_click_area(b, 2);
+  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+  lv_obj_t* l = mkLabel(b, sym, &font_ua_18, C_TEXT);
+  lv_obj_center(l);
+  lv_obj_add_event_cb(b, zoomBtnCb, LV_EVENT_CLICKED, (void*)(intptr_t)act);
+  return b;
 }
 
 // автозум: ціль поруч / рівень ≥ помаранчевий → район; загроза в області → область; чисто 2 хв → Україна
 static void autoZoom(const AppState& s) {
   if (!g_set.autoZoom || !s_map) return;
-  if (s_manualZoomAt && millis() - s_manualZoomAt < 180000UL) return;
+  if (s_manualZoomAt && millis() - s_manualZoomAt < MANUAL_ZOOM_HOLD_MS) return;
   s_manualZoomAt = 0;
   float ula, ulo; bool haveU = userPoint(ula, ulo);
   float nearKm = 1e9f; bool inObl = false;
@@ -922,7 +982,7 @@ static void markerAnimCb(void* o, int32_t v) {
 }
 
 static void frameAnimCb(void* o, int32_t v);
-static void mainDeleted(lv_event_t*) { s_main = nullptr; s_frame = nullptr; s_map = nullptr; s_marker = s_zoomBox = s_zoomTag = nullptr; lv_anim_del(nullptr, zoomAnimCb); lv_anim_del(nullptr, frameAnimCb); }
+static void mainDeleted(lv_event_t*) { s_main = nullptr; s_frame = nullptr; s_map = nullptr; s_marker = s_zoomBox = s_zoomTag = nullptr; s_btnZin = s_btnZout = s_btnZhome = nullptr; lv_anim_del(nullptr, zoomAnimCb); lv_anim_del(nullptr, frameAnimCb); }
 static void settingsBtnCb(lv_event_t*) { showSettings(); }
 static void showDetail();
 static void cardCb(lv_event_t*) { notifySilence(); showDetail(); }   // дотик до картки — тиша до наступного підвищення
@@ -1002,8 +1062,7 @@ static void showMain() {
   lv_obj_set_size(s_map, MAP_W, MAP_H);
   lv_obj_set_pos(s_map, 0, 27);
   lv_obj_add_event_cb(s_map, mapDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
-  lv_obj_add_event_cb(s_map, mapClickCb, LV_EVENT_CLICKED, nullptr);   // дотик — зум Україна → область → район
-  lv_obj_add_flag(s_map, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(s_map, LV_OBJ_FLAG_CLICKABLE);   // тап по мапі нічого не робить — зум лише кнопками
   lv_obj_clear_flag(s_map, LV_OBJ_FLAG_SCROLLABLE);
   if (!viewFor(s_zoom)) { s_zoom = 0; }
   s_view = viewFor(s_zoom);
@@ -1035,8 +1094,13 @@ static void showMain() {
   lv_obj_set_style_bg_opa(s_zoomTag, LV_OPA_60, 0);
   lv_obj_set_style_pad_hor(s_zoomTag, 3, 0);
   lv_obj_set_style_radius(s_zoomTag, 3, 0);
-  lv_obj_align(s_zoomTag, LV_ALIGN_BOTTOM_LEFT, 2, -1);
-  { static const char* ZT[3] = {"Україна", "Область", "Район"}; lv_label_set_text(s_zoomTag, ZT[s_zoom]); }
+  lv_obj_set_pos(s_zoomTag, 2, 2);
+  lv_label_set_text(s_zoomTag, zoomName(s_zoom));
+  // кнопки зуму — лівий нижній кут (на мапі України там порожньо): «+» над «−», «⌂» праворуч
+  s_btnZin = mkZoomBtn(s_map, LV_SYMBOL_PLUS, +1, 2, MAP_H - 2 - 36 - 3 - 36);
+  s_btnZout = mkZoomBtn(s_map, LV_SYMBOL_MINUS, -1, 2, MAP_H - 2 - 36);
+  s_btnZhome = mkZoomBtn(s_map, LV_SYMBOL_HOME, 0, 2 + 36 + 3, MAP_H - 2 - 36);
+  updateZoomBtns();
   lv_anim_t a; lv_anim_init(&a);
   lv_anim_set_var(&a, s_marker);
   lv_anim_set_exec_cb(&a, markerAnimCb);
@@ -1112,7 +1176,9 @@ static void showMain() {
 
   // джерело даних — у кутку мапи
   s_lblSrc = mkLabel(s_map, "", &font_ua_12, 0x5C6773);
-  lv_obj_set_pos(s_lblSrc, 2, MAP_H - 15);
+  lv_obj_align(s_lblSrc, LV_ALIGN_BOTTOM_RIGHT, -2, -1);
+  lv_obj_clear_flag(s_lblSrc, LV_OBJ_FLAG_CLICKABLE);
+  if (s_btnZin) { lv_obj_move_foreground(s_btnZin); lv_obj_move_foreground(s_btnZout); lv_obj_move_foreground(s_btnZhome); }
 
   // --- нижня картка статусу ---
   s_card = lv_obj_create(scr);
