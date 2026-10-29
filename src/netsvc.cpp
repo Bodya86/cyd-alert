@@ -877,24 +877,32 @@ static void wsPump() {                 // усі кадри, що вже при�
 // → true, якщо реалтайм-сервер дав свіжі дані (тоді GitHub не опитуємо)
 static bool rtTick(bool force) {
   if (!rtWanted()) { if (s_wsUp) wsClose(); return false; }
-  uint32_t now = millis();
+  // Увага: millis() беремо щоразу заново — s_wsRx/s_rtAt оновлюються всередині connect/pump/poll,
+  // і різниця зі «старим» now давала б переповнення uint32 (→ хибне «[ws] lost» і хибна «несвіжість»).
   if (s_wsUp && (force || rtStatePath() != s_wsPath)) wsClose();       // змінилось місто/район
-  if (!s_wsUp && (int32_t)(now - s_wsRetryAt) >= 0) {
-    if (!wsConnect()) s_wsRetryAt = now + 20000;
+  if (!s_wsUp && (int32_t)(millis() - s_wsRetryAt) >= 0) {
+    if (!wsConnect()) s_wsRetryAt = millis() + 20000;
   }
   if (s_wsUp) {
     wsPump();
-    if (s_wsUp && (!s_ws.connected() || now - s_wsRx > 70000)) { Serial.println("[ws] lost"); wsClose(); s_wsRetryAt = now + 3000; }
+    if (s_wsUp) {
+      bool conn = s_ws.connected();
+      int32_t silent = (int32_t)(millis() - s_wsRx);
+      if (!conn || silent > 70000) {
+        Serial.printf("[ws] lost (%s, %ld ms)\n", conn ? "silent" : "closed", (long)silent);
+        wsClose(); s_wsRetryAt = millis() + 3000;
+      }
+    }
   }
-  if (!s_wsUp && (force || now - s_rtPollAt > POLL_RT_MS)) {         // WS недоступний → HTTP-опитування з ETag
-    s_rtPollAt = now;
+  if (!s_wsUp && (force || (int32_t)(millis() - s_rtPollAt) > (int32_t)POLL_RT_MS)) {   // WS недоступний → HTTP з ETag
+    s_rtPollAt = millis();
     Req r;
     r.begin(String("http://" RT_SERVER_HOST "/static/") + rtStatePath(), nullptr, nullptr, nullptr, &s_rtEtag);
-    if (r.code == 304) s_rtAt = now;
+    if (r.code == 304) s_rtAt = millis();
     else if (r.code == 200) { s_rtEtag = r.etag; String b = r.http.getString(); rtApply(b.c_str(), b.length()); }
     else Serial.printf("[rt] http %d\n", r.code);
   }
-  return s_rtAt && now - s_rtAt < 90000;
+  return s_rtAt && (int32_t)(millis() - s_rtAt) < 90000;
 }
 
 // ----------------------------------------------------------------------------------------------

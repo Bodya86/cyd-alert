@@ -384,6 +384,10 @@ def make_app(out):
         await ws.prepare(req)
         subs.setdefault(p, set()).add(ws)
         STATS["ws_clients"] += 1
+        STATS["ws_connects"] = STATS.get("ws_connects", 0) + 1
+        who = req.headers.get("X-Forwarded-For", req.remote)
+        t0 = time.time()
+        log(f"ws+ {who} {rel} ({req.headers.get('User-Agent', '')[:40]})")
         try:
             if os.path.isfile(p):
                 with open(p, encoding="utf-8") as f:
@@ -396,6 +400,7 @@ def make_app(out):
         finally:
             subs.get(p, set()).discard(ws)
             STATS["ws_clients"] -= 1
+            log(f"ws- {who} {rel} після {time.time() - t0:.0f} с")
         return ws
 
     async def broadcast(paths):
