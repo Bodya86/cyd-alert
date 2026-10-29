@@ -4,6 +4,7 @@
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
 #include <lvgl.h>
+#include <esp_heap_caps.h>
 
 static TFT_eSPI tft;
 static SPIClass touchSpi(VSPI);
@@ -11,14 +12,23 @@ static XPT2046_Touchscreen ts(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 
 #define SCR_W 320
 #define SCR_H 240
-#define BUF_LINES 24
+#define BUF_LINES 20
+// два буфери у внутрішній DRAM (DMA-capable): LVGL малює в один, поки DMA відправляє інший на дисплей
 static lv_disp_draw_buf_t s_drawBuf;
 static lv_color_t s_buf[SCR_W * BUF_LINES];
+static lv_color_t* s_buf2 = nullptr;   // другий буфер — з купи (статичної DRAM не вистачає)
+static bool s_dma = false;
 static uint32_t s_lastTouch = 0;
 #define CH_BL 5
 
 static void flushCb(lv_disp_drv_t* drv, const lv_area_t* a, lv_color_t* px) {
   uint32_t w = a->x2 - a->x1 + 1, h = a->y2 - a->y1 + 1;
+  if (s_dma) {   // транзакція SPI відкрита постійно (шина дисплея окрема від тачу); pushImageDMA сам чекає попередній DMA
+    tft.pushImageDMA(a->x1, a->y1, w, h, (uint16_t*)&px->full);
+    if (!s_buf2) tft.dmaWait();   // один буфер — не віддаємо його LVGL, поки DMA не дочитав
+    lv_disp_flush_ready(drv);
+    return;
+  }
   tft.startWrite();
   tft.setAddrWindow(a->x1, a->y1, w, h);
   tft.pushColors((uint16_t*)&px->full, w * h, true);
@@ -55,8 +65,15 @@ void hwInit() {
   ts.begin(touchSpi);
   ts.setRotation(1);
 
+  s_dma = tft.initDMA();
+  if (s_dma) {
+    tft.setSwapBytes(true); tft.startWrite();
+    s_buf2 = (lv_color_t*)heap_caps_malloc(sizeof(lv_color_t) * SCR_W * BUF_LINES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  }
+  Serial.printf("[hw] display DMA %s, %d lines x %s buffer, heap %u\n", s_dma ? "on" : "off", BUF_LINES, s_buf2 ? "double" : "single", ESP.getFreeHeap());
+
   lv_init();
-  lv_disp_draw_buf_init(&s_drawBuf, s_buf, nullptr, SCR_W * BUF_LINES);
+  lv_disp_draw_buf_init(&s_drawBuf, s_buf, s_buf2, SCR_W * BUF_LINES);
   static lv_disp_drv_t disp;
   lv_disp_drv_init(&disp);
   disp.hor_res = SCR_W;

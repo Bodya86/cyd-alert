@@ -102,13 +102,15 @@ void otaTick() {
   bool manual = s_req;
   if (!manual && (!g_set.autoUpdate || (int32_t)(millis() - s_next) < 0)) return;
   s_req = false;
-  if (WiFi.status() != WL_CONNECTED) { s_next = millis() + OTA_RETRY_MS; return; }
+  if (WiFi.status() != WL_CONNECTED) { s_next = millis() + OTA_RETRY_MS; Serial.println("[ota] check skipped: no Wi-Fi, retry in 10 min"); return; }
   if (alertActive()) {   // ніколи не оновлюємося під час загрози місту
     s_next = millis() + OTA_RETRY_MS;
+    Serial.printf("[ota] check skipped: threat level %d (orange/red), retry in %lu min\n", (int)g_state.level, OTA_RETRY_MS / 60000UL);
     if (manual) { say("Зараз загроза — оновлення пізніше"); g_ota.manual = false; }
     return;
   }
   g_ota.state = OTA_CHECKING;
+  Serial.printf("[ota] checking %s (local v%s, %s)%s\n", OTA_MANIFEST_URL, FW_VERSION, FW_ENV, manual ? " [manual]" : "");
   WiFiClientSecure sec;
   HTTPClient http;
   JsonDocument doc;
@@ -120,6 +122,7 @@ void otaTick() {
     http.end();
   }
   if (!ok) {
+    Serial.println("[ota] check failed: manifest not loaded, retry in 10 min");
     s_next = millis() + OTA_RETRY_MS;
     g_ota.state = OTA_IDLE;
     if (manual) say("Не вдалося перевірити оновлення");
@@ -134,13 +137,15 @@ void otaTick() {
   int size = e["size"] | 0;
   String md5 = e["md5"] | "";
   g_ota.state = OTA_IDLE;
+  Serial.printf("[ota] manifest: remote v%s, local v%s, file %s (%d B) -> %s\n", ver[0] ? ver : "?", FW_VERSION,
+                url.length() ? "yes" : "no", size, (!ver[0] || otaCompare(ver, FW_VERSION) <= 0) ? "up to date" : "update available");
   if (!ver[0] || otaCompare(ver, FW_VERSION) <= 0) {
     if (manual) { char b[96]; snprintf(b, sizeof(b), "Встановлено останню версію v%s", FW_VERSION); say(b); }
     g_ota.manual = false;
     return;
   }
   if (!url.length() || size <= 0) { say("Маніфест без файлу для цієї плати"); g_ota.manual = false; return; }
-  if (alertActive()) { s_next = millis() + OTA_RETRY_MS; g_ota.manual = false; return; }
+  if (alertActive()) { s_next = millis() + OTA_RETRY_MS; g_ota.manual = false; Serial.println("[ota] install skipped: threat level rose to orange/red, retry in 10 min"); return; }
   char b[96]; snprintf(b, sizeof(b), "Завантажую v%s…", ver); say(b);
   install(url, size, md5);
   g_ota.manual = false;

@@ -1,7 +1,7 @@
 #pragma once
 // Версія прошивки. Workflow .github/workflows/firmware.yml публікує реліз v<FW_VERSION>, якщо такого ще немає —
 // пристрої з увімкненим «Автооновлення» підтягнуть його (OTA). Підвищуйте версію при кожній зміні прошивки.
-#define FW_VERSION "1.3.1"
+#define FW_VERSION "1.3.2"
 
 #ifndef FW_ENV                 // ідентифікатор збірки (env у platformio.ini) — обирає потрібний .bin у version.json
 #define FW_ENV "cyd"

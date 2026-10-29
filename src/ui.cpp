@@ -694,12 +694,15 @@ static void mapDrawCb(lv_event_t* e) {
 static MapTarget s_tgt[MAX_TARGETS];
 static uint8_t s_ntgt = 0;
 
-// Ціль розрізняється лише кольором (без підписів — при скупченні вони налазили один на одного):
-// дрони — жовтий, крилаті ракети / КАБ — червоний, балістика — малиново-пурпурний, інше / невідомо — помаранчевий.
-#define TC_DRONE   0xFFE135
+// Ціль розрізняється лише кольором і силуетом (без підписів). Кольори обрано так, щоб не зливалися
+// із заливкою областей (зелена/жовта/помаранчева/червона): дрони — фіолетовий «шахед» з білою+темною обвідкою,
+// крилаті ракети / КАБ — червоний ромб з білою обвідкою, балістика — блакитний ромб з темною обвідкою,
+// інше / невідомо — помаранчевий з білою обвідкою. Курс — білий пунктир з темною підкладкою.
+#define TC_DRONE   0xB44CFF
 #define TC_MISSILE 0xFF2B2B
-#define TC_BALL    0xFF2BD6
+#define TC_BALL    0x2EE6FF
 #define TC_OTHER   0xFF8C1A
+#define TC_COURSE  0xFFFFFF
 static uint32_t targetColor(char ch) {
   switch (ch) {
     case 'S': case 'J': case 'D': return TC_DRONE;
@@ -729,16 +732,26 @@ static void dashLine(lv_draw_ctx_t* dc, const lv_draw_line_dsc_t* ln, lv_point_t
   phase = fmodf(phase + L, PER);
 }
 
+// силует за курсом: (u, v) — u вздовж курсу (вперед +), v — вбік; p0 — центр
+static inline lv_point_t tpt(lv_point_t p0, float sx, float sy, float s, float fw, float side) {
+  // fw — вперед (у одиницях s), side — праворуч
+  return {(lv_coord_t)lroundf(p0.x + s * (fw * sx - side * sy)), (lv_coord_t)lroundf(p0.y + s * (fw * sy + side * sx))};
+}
+
 static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
   if (!s_ntgt) return;
+  const lv_area_t* clip = dc->clip_area;
   const float KM_PX = s_view->scale / 111.0f;      // пікселів на км (широта)
-  static const float ICON[3] = {5.5f, 7.0f, 8.5f};
+  static const float ICON[3] = {6.0f, 7.5f, 9.0f};
   float S = ICON[s_zoom > 2 ? 2 : s_zoom];
   lv_draw_rect_dsc_t cone; lv_draw_rect_dsc_init(&cone);
   cone.radius = LV_RADIUS_CIRCLE; cone.border_width = 0; cone.bg_opa = LV_OPA_10;
-  lv_draw_line_dsc_t ln; lv_draw_line_dsc_init(&ln);
-  ln.width = s_zoom ? 2 : 1; ln.opa = LV_OPA_90; ln.round_start = 0; ln.round_end = 0;
-  lv_draw_line_dsc_t tk = ln; tk.width = 1;
+  // курс: темна підкладка (ширша) + білий пунктир 2 px — видно на будь-якій заливці
+  lv_draw_line_dsc_t lnD; lv_draw_line_dsc_init(&lnD);
+  lnD.width = 4; lnD.opa = LV_OPA_70; lnD.color = lv_color_black(); lnD.round_start = 0; lnD.round_end = 0;
+  lv_draw_line_dsc_t lnW = lnD; lnW.width = 2; lnW.opa = LV_OPA_COVER; lnW.color = col(TC_COURSE);
+  lv_draw_line_dsc_t tkD = lnD; tkD.width = 3;
+  lv_draw_line_dsc_t tkW = lnW; tkW.width = 1;
   lv_point_t pos[MAX_TARGETS]; bool vis[MAX_TARGETS] = {false};
   // 1) конуси й пунктир — під значками
   for (int k = s_ntgt - 1; k >= 0; k--) {
@@ -746,8 +759,18 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
     lv_color_t tc = col(targetColor(t.ch));
     lv_point_t p0 = mapPt(c, t.lat, t.lon);
     pos[k] = p0;
-    bool in = !(p0.x < c.x1 - 4 || p0.x > c.x2 + 4 || p0.y < c.y1 - 4 || p0.y > c.y2 + 4);
+    bool in = !(p0.x < c.x1 - 12 || p0.x > c.x2 + 12 || p0.y < c.y1 - 12 || p0.y > c.y2 + 12);
     vis[k] = in;
+    // межі курсу — щоб не рахувати лінії для смуг буфера, яких ціль не торкається
+    lv_area_t bb = {p0.x, p0.y, p0.x, p0.y};
+    for (int i = 0; i < t.npt; i++) {
+      lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
+      int r = LV_CLAMP(2, (int)(t.psd[i] * KM_PX + 0.5f), s_zoom ? 40 : 16);
+      bb.x1 = LV_MIN(bb.x1, q.x - r); bb.y1 = LV_MIN(bb.y1, q.y - r); bb.x2 = LV_MAX(bb.x2, q.x + r); bb.y2 = LV_MAX(bb.y2, q.y + r);
+    }
+    bb.x1 -= 4; bb.y1 -= 4; bb.x2 += 4; bb.y2 += 4;
+    lv_area_t tmp;
+    if (!_lv_area_intersect(&tmp, &bb, clip)) continue;
     cone.bg_color = tc;
     for (int i = 0; i < t.npt; i++) {
       lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
@@ -755,52 +778,59 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
       lv_area_t a = {(lv_coord_t)(q.x - r), (lv_coord_t)(q.y - r), (lv_coord_t)(q.x + r), (lv_coord_t)(q.y + r)};
       lv_draw_rect(dc, &cone, &a);
     }
-    ln.color = tc; tk.color = tc;
-    lv_point_t prev = p0, before = p0;
-    float phase = 0;
-    for (int i = 0; i < t.npt; i++) {
-      lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
-      if (q.x == prev.x && q.y == prev.y) continue;
-      dashLine(dc, &ln, prev, q, phase);
-      // мітка часу +5/+15/+30 хв: короткий поперечний штрих (без тексту)
-      float dx = q.x - prev.x, dy = q.y - prev.y, L = sqrtf(dx * dx + dy * dy);
-      if (L > 0.5f) {
-        dx /= L; dy /= L;
-        lv_point_t a1 = {(lv_coord_t)(q.x + 3 * dy), (lv_coord_t)(q.y - 3 * dx)}, a2 = {(lv_coord_t)(q.x - 3 * dy), (lv_coord_t)(q.y + 3 * dx)};
-        lv_draw_line(dc, &tk, &a1, &a2);
+    for (int pass = 0; pass < 2; pass++) {
+      const lv_draw_line_dsc_t* ln = pass ? &lnW : &lnD;
+      const lv_draw_line_dsc_t* tk = pass ? &tkW : &tkD;
+      lv_point_t prev = p0;
+      float phase = 0;
+      for (int i = 0; i < t.npt; i++) {
+        lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
+        if (q.x == prev.x && q.y == prev.y) continue;
+        dashLine(dc, ln, prev, q, phase);
+        // мітка часу +5/+15/+30 хв: короткий поперечний штрих (без тексту)
+        float dx = q.x - prev.x, dy = q.y - prev.y, L = sqrtf(dx * dx + dy * dy);
+        if (L > 0.5f) {
+          dx /= L; dy /= L;
+          lv_point_t a1 = {(lv_coord_t)(q.x + 3 * dy), (lv_coord_t)(q.y - 3 * dx)}, a2 = {(lv_coord_t)(q.x - 3 * dy), (lv_coord_t)(q.y + 3 * dx)};
+          lv_draw_line(dc, tk, &a1, &a2);
+        }
+        prev = q;
       }
-      before = prev; prev = q;
     }
-    (void)before;
   }
-  // 2) значки: дрони — трикутник за курсом (стрілка курсу), ракети/КАБ — ромб; чорна обвідка
+  // 2) значки: дрони — силует «шахеда» (дельта-крило + фюзеляж) за курсом; ракети/КАБ/балістика — ромб.
+  //    Шари: темний контур → світлий контур → заливка кольором типу.
+  lv_draw_rect_dsc_t ic; lv_draw_rect_dsc_init(&ic);
+  ic.bg_opa = LV_OPA_COVER; ic.border_width = 0;
   for (int k = s_ntgt - 1; k >= 0; k--) {
     if (!vis[k]) continue;
+    lv_point_t p0 = pos[k];
+    lv_area_t bb = {(lv_coord_t)(p0.x - S - 4), (lv_coord_t)(p0.y - S - 4), (lv_coord_t)(p0.x + S + 4), (lv_coord_t)(p0.y + S + 4)}, tmp;
+    if (!_lv_area_intersect(&tmp, &bb, clip)) continue;
     const MapTarget& t = s_tgt[k];
     lv_color_t tc = col(targetColor(t.ch));
-    lv_point_t p0 = pos[k];
-    lv_draw_rect_dsc_t ic; lv_draw_rect_dsc_init(&ic);
-    ic.bg_opa = LV_OPA_COVER; ic.border_width = 0;
     bool missile = t.ch == 'C' || t.ch == 'K' || t.ch == 'B';
+    bool drone = !missile && t.hd >= 0 && (t.ch == 'S' || t.ch == 'J' || t.ch == 'D');
     float hr = (t.hd >= 0 ? t.hd : 0) * 0.0174533f, sx = sinf(hr), sy = -cosf(hr);
-    for (int pass = 0; pass < 2; pass++) {
-      float s = pass ? S - 1.5f : S;
-      ic.bg_color = pass ? tc : lv_color_black();
-      lv_point_t pts[4];
-      int n;
-      if (missile || t.hd < 0) {
-        pts[0] = {(lv_coord_t)(p0.x + s * sx), (lv_coord_t)(p0.y + s * sy)};
-        pts[1] = {(lv_coord_t)(p0.x - s * 0.7f * sy), (lv_coord_t)(p0.y + s * 0.7f * sx)};
-        pts[2] = {(lv_coord_t)(p0.x - s * sx), (lv_coord_t)(p0.y - s * sy)};
-        pts[3] = {(lv_coord_t)(p0.x + s * 0.7f * sy), (lv_coord_t)(p0.y - s * 0.7f * sx)};
-        n = 4;
+    // ballistic: темний контур, без білого (заливка й так світла); решта — темний + білий
+    const lv_color_t layers[3] = {lv_color_black(), t.ch == 'B' ? lv_color_black() : lv_color_white(), tc};
+    const float grow[3] = {2.2f, 1.1f, 0.0f};
+    for (int pass = 0; pass < 3; pass++) {
+      float s = S + grow[pass];
+      ic.bg_color = layers[pass];
+      if (drone) {
+        // дельта-крило
+        lv_point_t w[3] = {tpt(p0, sx, sy, s, 0.85f, 0), tpt(p0, sx, sy, s, -0.75f, 1.0f), tpt(p0, sx, sy, s, -0.75f, -1.0f)};
+        lv_draw_polygon(dc, &ic, w, 3);
+        // фюзеляж (видовжений ромб) — ніс виступає вперед, хвіст позаду крила
+        float g = grow[pass] / s;
+        lv_point_t f[4] = {tpt(p0, sx, sy, s, 1.15f + g * 0.3f, 0), tpt(p0, sx, sy, s, 0.0f, 0.2f + g * 0.6f),
+                           tpt(p0, sx, sy, s, -1.0f - g * 0.3f, 0), tpt(p0, sx, sy, s, 0.0f, -0.2f - g * 0.6f)};
+        lv_draw_polygon(dc, &ic, f, 4);
       } else {
-        pts[0] = {(lv_coord_t)(p0.x + s * sx), (lv_coord_t)(p0.y + s * sy)};
-        pts[1] = {(lv_coord_t)(p0.x - s * 0.8f * sx - s * 0.8f * sy), (lv_coord_t)(p0.y - s * 0.8f * sy + s * 0.8f * sx)};
-        pts[2] = {(lv_coord_t)(p0.x - s * 0.8f * sx + s * 0.8f * sy), (lv_coord_t)(p0.y - s * 0.8f * sy - s * 0.8f * sx)};
-        n = 3;
+        lv_point_t pts[4] = {tpt(p0, sx, sy, s, 1.0f, 0), tpt(p0, sx, sy, s, 0, 0.7f), tpt(p0, sx, sy, s, -1.0f, 0), tpt(p0, sx, sy, s, 0, -0.7f)};
+        lv_draw_polygon(dc, &ic, pts, 4);
       }
-      lv_draw_polygon(dc, &ic, pts, n);
     }
   }
 }
@@ -935,13 +965,15 @@ static void autoZoom(const AppState& s) {
   else if (now - s_autoHoldAt > 120000UL) setZoom(want, true);
 }
 
-static void markerAnimCb(void* o, int32_t v) {
-  lv_obj_set_style_shadow_spread((lv_obj_t*)o, v, 0);
-  lv_obj_set_style_shadow_opa((lv_obj_t*)o, 255 - v * 40, 0);
-}
 
-static void frameAnimCb(void* o, int32_t v);
-static void mainDeleted(lv_event_t*) { s_main = nullptr; s_frame = nullptr; s_map = nullptr; s_marker = s_zoomBox = s_zoomTag = nullptr; s_btnZin = s_btnZout = s_btnZhome = nullptr; lv_anim_del(nullptr, zoomAnimCb); lv_anim_del(nullptr, frameAnimCb); }
+#define RED_PULSE_MS 500
+static lv_timer_t* s_pulseT = nullptr;
+static void mainDeleted(lv_event_t*) {
+  s_main = nullptr; s_frame = nullptr; s_map = nullptr; s_marker = s_zoomBox = s_zoomTag = nullptr; s_btnZin = s_btnZout = s_btnZhome = nullptr;
+  s_card = s_cardBar = nullptr;
+  lv_anim_del(nullptr, zoomAnimCb);
+  if (s_pulseT) { lv_timer_del(s_pulseT); s_pulseT = nullptr; }
+}
 static void settingsBtnCb(lv_event_t*) { showSettings(); }
 static void showDetail();
 static void cardCb(lv_event_t*) { notifySilence(); showDetail(); }   // дотик до картки — тиша до наступного підвищення
@@ -962,17 +994,21 @@ static lv_obj_t* legendRow(lv_obj_t* p, int y, uint32_t c, const char* t, int x 
 }
 
 static void updateMain(bool full);
+static String s_seg[3];
+static uint8_t s_segN = 0, s_segI = 0;
+static uint32_t s_segAt = 0;
 
-// пульс рамки/тла: червоний — яскраво і помітно, помаранчевий — м'якше, жовтий/зелений — без анімації
-static void frameAnimCb(void* o, int32_t v) {
-  lv_obj_t* f = (lv_obj_t*)o;
+// пульс лише картки статусу (рамка й смужка), ~2 кадри/с: раніше пульсувала рамка всього екрана й тло
+// на 50 кадрах/с — це щоразу перемальовувало весь екран разом із мапою і гальмувало інтерфейс.
+static void pulseTimerCb(lv_timer_t*) {
+  if (!s_card || !s_cardBar) return;
+  static bool ph = false;
   Level L = s_uiLevel;
-  if (L == LVL_RED) {
-    lv_obj_set_style_border_color(f, lv_color_mix(col(0xFF3B3F), col(0x7A0010), v), 0);
-    if (s_main) lv_obj_set_style_bg_color(s_main, lv_color_mix(col(0x4A0B10), col(LEVEL_BG[LVL_RED]), v), 0);
-  } else if (L == LVL_ORANGE) {
-    lv_obj_set_style_border_color(f, lv_color_mix(col(C_ORANGE), col(0x8A4008), v), 0);
-  }
+  if (L < LVL_ORANGE) return;
+  ph = !ph;
+  uint32_t hi = L == LVL_RED ? 0xFF3B3F : C_ORANGE, lo = L == LVL_RED ? 0x7A0010 : 0x8A4008;
+  lv_obj_set_style_border_color(s_card, col(ph ? hi : lo), 0);
+  lv_obj_set_style_bg_color(s_cardBar, col(ph ? hi : lo), 0);
 }
 
 static void applyLevelTint(Level L) {
@@ -985,6 +1021,8 @@ static void applyLevelTint(Level L) {
   lv_obj_set_style_bg_color(s_card, col(LEVEL_CARD[L]), 0);
   lv_obj_set_style_bg_color(s_cardBar, col(levelColor(L)), 0);
   lv_obj_set_size(s_cardBar, L >= LVL_ORANGE ? 10 : 6, 46);
+  lv_obj_set_style_border_width(s_card, L >= LVL_ORANGE ? 2 : 0, 0);
+  lv_obj_set_style_border_color(s_card, col(levelColor(L)), 0);
   lv_obj_set_style_text_color(s_cardTitle, col(levelColor(L)), 0);
   lv_obj_set_style_text_color(s_cardText, col(L == LVL_RED ? 0xFFD9DA : L == LVL_ORANGE ? 0xFFE2C4 : C_MUTED), 0);
   lv_obj_set_pos(s_cardTitle, L >= LVL_ORANGE ? 18 : 14, 3);
@@ -1036,8 +1074,6 @@ static void showMain() {
   lv_obj_set_style_bg_opa(s_marker, LV_OPA_COVER, 0);
   lv_obj_set_style_border_color(s_marker, col(C_ACCENT), 0);
   lv_obj_set_style_border_width(s_marker, 2, 0);
-  lv_obj_set_style_shadow_color(s_marker, col(0xFFFFFF), 0);
-  lv_obj_set_style_shadow_width(s_marker, 4, 0);
   placeMarker();
   // рамка переходу між видами + мітка поточного зуму
   s_zoomBox = lv_obj_create(s_map);
@@ -1060,14 +1096,6 @@ static void showMain() {
   s_btnZout = mkZoomBtn(s_map, LV_SYMBOL_MINUS, -1, 2, MAP_H - 2 - 36);
   s_btnZhome = mkZoomBtn(s_map, LV_SYMBOL_HOME, 0, 2 + 36 + 3, MAP_H - 2 - 36);
   updateZoomBtns();
-  lv_anim_t a; lv_anim_init(&a);
-  lv_anim_set_var(&a, s_marker);
-  lv_anim_set_exec_cb(&a, markerAnimCb);
-  lv_anim_set_values(&a, 0, 6);
-  lv_anim_set_time(&a, 900);
-  lv_anim_set_playback_time(&a, 900);
-  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-  lv_anim_start(&a);
 
   // --- права панель ---
   lv_obj_t* rp = lv_obj_create(scr);
@@ -1133,10 +1161,8 @@ static void showMain() {
     }
   }, LV_EVENT_DRAW_MAIN, nullptr);
 
-  // джерело даних — у кутку мапи
-  s_lblSrc = mkLabel(s_map, "", &font_ua_12, 0x5C6773);
-  lv_obj_align(s_lblSrc, LV_ALIGN_BOTTOM_RIGHT, -2, -1);
-  lv_obj_clear_flag(s_lblSrc, LV_OBJ_FLAG_CLICKABLE);
+  // джерело/вік даних більше не показуються на мапі (див. «Деталі загрози»)
+  s_lblSrc = nullptr;
   if (s_btnZin) { lv_obj_move_foreground(s_btnZin); lv_obj_move_foreground(s_btnZout); lv_obj_move_foreground(s_btnZhome); }
 
   // --- нижня картка статусу ---
@@ -1160,7 +1186,7 @@ static void showMain() {
   lv_obj_set_pos(s_cardTitle, 14, 3);
   s_cardText = mkLabel(s_card, "", &font_ua_12, C_MUTED);
   lv_obj_set_width(s_cardText, 290);
-  lv_label_set_long_mode(s_cardText, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_label_set_long_mode(s_cardText, LV_LABEL_LONG_DOT);   // без бігучого рядка (він гальмував)
   lv_obj_set_pos(s_cardText, 14, 26);
 
   // рамка рівня поверх усього екрана (не перехоплює дотики): помаранчевий — тонка, червоний — товста, пульсує
@@ -1173,14 +1199,8 @@ static void showMain() {
   lv_obj_clear_flag(s_frame, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_clear_flag(s_frame, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(s_frame, LV_OBJ_FLAG_IGNORE_LAYOUT);
-  lv_anim_t fa; lv_anim_init(&fa);
-  lv_anim_set_var(&fa, s_frame);
-  lv_anim_set_exec_cb(&fa, frameAnimCb);
-  lv_anim_set_values(&fa, 0, 255);
-  lv_anim_set_time(&fa, 700);
-  lv_anim_set_playback_time(&fa, 700);
-  lv_anim_set_repeat_count(&fa, LV_ANIM_REPEAT_INFINITE);
-  lv_anim_start(&fa);
+  if (s_pulseT) lv_timer_del(s_pulseT);
+  s_pulseT = lv_timer_create(pulseTimerCb, RED_PULSE_MS, nullptr);
 
   s_seenVersion = UINT32_MAX;
   updateMain(true);
@@ -1189,17 +1209,23 @@ static void showMain() {
 
 static void updateMain(bool full) {
   if (!s_main) return;
+  // віджети чіпаємо лише при реальній зміні — кожен set_text/set_style інвалідовує область і тягне перемальовку
+  static int lastMin = -1, lastWifi = -1;
+  if (full) { lastMin = -1; lastWifi = -1; }
   struct tm tm;
-  if (getLocalTime(&tm, 0)) lv_label_set_text_fmt(s_lblTime, "%02d:%02d", tm.tm_hour, tm.tm_min);
-  bool wifi = WiFi.status() == WL_CONNECTED;
-  lv_obj_set_style_text_color(s_lblWifi, col(wifi ? C_GREEN : C_RED), 0);
+  if (getLocalTime(&tm, 0) && tm.tm_hour * 60 + tm.tm_min != lastMin) {
+    lastMin = tm.tm_hour * 60 + tm.tm_min;
+    lv_label_set_text_fmt(s_lblTime, "%02d:%02d", tm.tm_hour, tm.tm_min);
+  }
+  int wifi = WiFi.status() == WL_CONNECTED;
+  if (wifi != lastWifi) { lastWifi = wifi; lv_obj_set_style_text_color(s_lblWifi, col(wifi ? C_GREEN : C_RED), 0); }
 
-  static AppState snap;
+  static AppState snap;   // копія стану — лише коли мережева задача опублікувала нову версію
   stateLock();
-  snap = g_state;
-  stateUnlock();
-  uint32_t ver = snap.version;
+  uint32_t ver = g_state.version;
   bool changed = full || ver != s_seenVersion;
+  if (changed) snap = g_state;
+  stateUnlock();
 
   if (changed) {
     s_seenVersion = ver;
@@ -1243,6 +1269,7 @@ static void updateMain(bool full) {
     }
     lv_label_set_text_fmt(s_cardTitle, "%s  ·  %s", levelName(L), sub);
     String line;
+    String segPred, segTarget;
     if (snap.tgText[0]) {
       line = fmtTime(snap.tgTime) + "  " + snap.tgText;
     } else if (snap.tgOk) {
@@ -1256,14 +1283,22 @@ static void updateMain(bool full) {
       int pn = snap.pBallistic > snap.pNear ? snap.pBallistic : snap.pNear;
       if (snap.eta >= 0) snprintf(pre, sizeof(pre), "P(близько) %d%% · ETA %d хв  ·  ", pn, snap.eta);
       else snprintf(pre, sizeof(pre), "P(близько) %d%% · цілей %d  ·  ", pn, snap.ntgt);
-      line = String(pre) + line;
+      segPred = pre;
+      segPred.replace("  ·  ", "");
     }
     if (s_ltP >= 5 && s_ltName[0]) {
       char pre[64];
-      snprintf(pre, sizeof(pre), "ймовірна ціль: %s %d%%  ·  ", s_ltName, s_ltP);
-      line = String(pre) + line;
+      snprintf(pre, sizeof(pre), "ймовірна ціль: %s %d%%", s_ltName, s_ltP);
+      segTarget = pre;
     }
-    lv_label_set_text(s_cardText, line.c_str());
+    // частини по черзі: прогноз → ймовірна ціль → текст поста
+    s_segN = 0;
+    if (segPred.length()) s_seg[s_segN++] = segPred;
+    if (segTarget.length()) s_seg[s_segN++] = segTarget;
+    s_seg[s_segN++] = line;
+    if (s_segI >= s_segN) s_segI = 0;
+    s_segAt = millis();
+    lv_label_set_text(s_cardText, s_seg[s_segI].c_str());
   }
   autoZoom(snap);
   // графік відключень: щохвилини (зміна півгодинки) або при оновленні даних
@@ -1289,11 +1324,14 @@ static void updateMain(bool full) {
       if (at) lv_label_set_text_fmt(s_outTime, "до %s", fmtTime(at).c_str());
       else lv_label_set_text(s_outTime, cur == OUT_ON ? "без відкл." : "—");
     }
-    lv_obj_invalidate(s_outBar);
+    if (changed || cur != OUT_NONE) lv_obj_invalidate(s_outBar);
   }
-  // вік даних
-  uint32_t age = snap.alertsAt ? (millis() - snap.alertsAt) / 1000 : 0;
-  lv_label_set_text_fmt(s_lblSrc, "%s · %lus", snap.alertsSrc, (unsigned long)age);
+  // текст картки: частини по черзі раз на 4 с — без анімації прокрутки
+  if (s_segN > 1 && millis() - s_segAt > 4000) {
+    s_segAt = millis();
+    s_segI = (s_segI + 1) % s_segN;
+    lv_label_set_text(s_cardText, s_seg[s_segI].c_str());
+  }
 }
 
 // ------------------------------- Деталі -------------------------------
@@ -1345,12 +1383,20 @@ static void showDetail() {
   {  // легенда кольорів цілей на мапі
     lv_obj_t* lg = lv_obj_create(cont);
     lv_obj_remove_style_all(lg);
-    lv_obj_set_size(lg, 300, 32);
+    lv_obj_set_size(lg, 300, 48);
     lv_obj_clear_flag(lg, LV_OBJ_FLAG_SCROLLABLE);
-    legendRow(lg, 0, TC_DRONE, "дрони", 0);
-    legendRow(lg, 0, TC_MISSILE, "ракети / КАБ", 80);
+    legendRow(lg, 0, TC_DRONE, "дрони (шахед)", 0);
+    legendRow(lg, 0, TC_MISSILE, "ракети / КАБ", 150);
     legendRow(lg, 16, TC_BALL, "балістика", 0);
-    legendRow(lg, 16, TC_OTHER, "інше / невідомо", 80);
+    legendRow(lg, 16, TC_OTHER, "інше / невідомо", 150);
+    legendRow(lg, 32, TC_COURSE, "курс — білий пунктир", 0);
+  }
+  {
+    uint32_t age = s.alertsAt ? (millis() - s.alertsAt) / 1000 : 0;
+    char src[160];
+    snprintf(src, sizeof(src), "Джерело тривог: %s, оновлено %lu с тому.\nДані: JAAM (jaam.net.ua) · alerts.in.ua · Telegram-канали", s.alertsSrc, (unsigned long)age);
+    l = mkLabel(cont, src, &font_ua_12, C_MUTED);
+    lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
   }
   l = mkLabel(cont, "Аналіз автоматичний (ключові слова) і може помилятися. Завжди дійте за офіційними сигналами тривоги.", &font_ua_12, 0x5C6773);
   lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
