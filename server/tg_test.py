@@ -1,5 +1,5 @@
 """Тест сповіщень Telegram (workflow tg-test): одне повідомлення з мапою. --dry-run — без надсилання."""
-import json, os, sys, urllib.error, urllib.request, uuid, io
+import json, os, sys, urllib.error, urllib.parse, urllib.request, uuid, io
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tg_notify as tn
 
@@ -19,7 +19,6 @@ def call(token, method, fields, files=None):
         b.write(f"--{bnd}--\r\n".encode())
         req = urllib.request.Request(url, data=b.getvalue(), headers={"Content-Type": f"multipart/form-data; boundary={bnd}"})
     else:
-        import urllib.parse
         req = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode())
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
