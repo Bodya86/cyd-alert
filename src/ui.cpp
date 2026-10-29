@@ -228,14 +228,46 @@ static void wifiItemCb(lv_event_t* e) {
   showPassword(s_ssids[i]);
 }
 
+static uint8_t s_scanFails = 0;
+static uint32_t s_scanAt = 0;
+static lv_obj_t* s_wifiHint = nullptr;
+
+// Зупинити спроби підключення до старої мережі: поки STA «connecting», esp_wifi_scan_start
+// повертає помилку, і scanComplete() вічно дає WIFI_SCAN_FAILED (-2) — список порожній.
+static void wifiIdle() {
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_STA);
+}
+
+static bool kickScan() {
+  WiFi.scanDelete();
+  int16_t r = WiFi.scanNetworks(true, true);   // async, з прихованими
+  s_scanAt = millis();
+  Serial.printf("[wifi] scan start -> %d (status %d)\n", r, (int)WiFi.status());
+  return r != WIFI_SCAN_FAILED;
+}
+
 static void scanTimerCb(lv_timer_t*) {
   int n = WiFi.scanComplete();
-  if (n == WIFI_SCAN_RUNNING) return;
-  if (n == WIFI_SCAN_FAILED) { WiFi.scanNetworks(true); return; }
+  if (n == WIFI_SCAN_RUNNING && millis() - s_scanAt < 15000) return;
+  if (n < 0) {   // помилка або завис
+    s_scanFails++;
+    Serial.printf("[wifi] scan failed (%d), try %u\n", n, s_scanFails);
+    if (s_scanFails % 4 == 0) { WiFi.mode(WIFI_OFF); delay(50); }
+    wifiIdle();
+    kickScan();
+    if (s_wifiHint && s_scanFails >= 3) lv_label_set_text(s_wifiHint, "Пошук не вдався, повтор… (або введіть вручну)");
+    return;
+  }
   lv_timer_del(s_scanTimer); s_scanTimer = nullptr;
+  s_scanFails = 0;
   if (s_wifiSpinner) { lv_obj_del(s_wifiSpinner); s_wifiSpinner = nullptr; }
   lv_obj_clean(s_wifiList);
+  s_wifiHint = nullptr;
   s_ssids.clear();
+  Serial.printf("[wifi] scan done: %d networks\n", n);
+  for (int i = 0; i < n; i++) Serial.printf("[wifi]  %s ch%d %d dBm\n", WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i));
   for (int i = 0; i < n && s_ssids.size() < 25; i++) {
     String ss = WiFi.SSID(i);
     if (!ss.length()) continue;
@@ -250,13 +282,16 @@ static void scanTimerCb(lv_timer_t*) {
     lv_obj_t* icon = lv_obj_get_child(b, 0);
     if (icon) lv_obj_set_style_text_color(icon, col(rssi > -60 ? C_GREEN : rssi > -75 ? C_YELLOW : C_RED), 0);
   }
+  if (s_ssids.empty()) lv_list_add_text(s_wifiList, "Мереж не знайдено. Потрібна мережа 2.4 ГГц (5 ГГц не видно).");
   mkListBtn(s_wifiList, LV_SYMBOL_EDIT, "Ввести назву мережі вручну", wifiItemCb, (void*)(intptr_t)-1);
+  mkListBtn(s_wifiList, LV_SYMBOL_REFRESH, "Оновити список", [](lv_event_t*) { showWifiScan(); }, nullptr);
   WiFi.scanDelete();
 }
 
 static void startScan() {
-  WiFi.scanDelete();
-  WiFi.scanNetworks(true, false);
+  s_scanFails = 0;
+  wifiIdle();
+  kickScan();
   if (s_scanTimer) lv_timer_del(s_scanTimer);
   s_scanTimer = lv_timer_create(scanTimerCb, 300, nullptr);
 }
@@ -273,9 +308,11 @@ static void showWifiScan() {
   lv_obj_t* h = mkHeader(scr, "Оберіть Wi-Fi мережу", g_set.configured() ? wifiBackCb : nullptr);
   mkHeaderBtn(h, LV_SYMBOL_REFRESH, rescanCb);
   s_wifiList = mkList(scr, 36, 204);
+  s_wifiHint = lv_list_add_text(s_wifiList, "Пошук мереж… (тільки 2.4 ГГц)");
+  mkListBtn(s_wifiList, LV_SYMBOL_EDIT, "Ввести назву мережі вручну", wifiItemCb, (void*)(intptr_t)-1);
   s_wifiSpinner = lv_spinner_create(scr, 1000, 60);
   lv_obj_set_size(s_wifiSpinner, 50, 50);
-  lv_obj_center(s_wifiSpinner);
+  lv_obj_align(s_wifiSpinner, LV_ALIGN_CENTER, 0, 30);
   lv_obj_set_style_arc_color(s_wifiSpinner, col(C_ACCENT), LV_PART_INDICATOR);
   loadScreen(scr);
   startScan();
@@ -339,6 +376,8 @@ static void connTimerCb(lv_timer_t*) {
   wl_status_t st = WiFi.status();
   if (st == WL_CONNECTED) {
     lv_timer_del(s_connTimer); s_connTimer = nullptr;
+    WiFi.setAutoReconnect(true);
+    Serial.printf("[wifi] connected to %s\n", s_connSsid.c_str());
     g_set.ssid = s_connSsid; g_set.pass = s_connPass;
     settingsSave();
     netForceRefresh();
@@ -347,6 +386,7 @@ static void connTimerCb(lv_timer_t*) {
   }
   if (millis() - s_connStart > 20000) {
     lv_timer_del(s_connTimer); s_connTimer = nullptr;
+    Serial.printf("[wifi] connect to %s failed (status %d) -> scan\n", s_connSsid.c_str(), (int)st);
     showWifiScan();
     toast("Не вдалося підключитися. Перевірте пароль.", C_RED);
   }
@@ -367,7 +407,10 @@ static void showConnecting(const String& ssid, const String& pass, bool) {
   lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -30);
   loadScreen(scr);
   s_connSsid = ssid; s_connPass = pass;
+  if (s_scanTimer) { lv_timer_del(s_scanTimer); s_scanTimer = nullptr; }
+  WiFi.scanDelete();
   WiFi.disconnect();
+  WiFi.setAutoReconnect(true);
   WiFi.begin(ssid.c_str(), pass.c_str());
   s_connStart = millis();
   if (s_connTimer) lv_timer_del(s_connTimer);
