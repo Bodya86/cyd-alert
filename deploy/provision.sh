@@ -36,7 +36,7 @@ rm -f /tmp/cyd.bundle
 chown -R cyd:cyd "$DATA"
 python3 -m venv "$APP/.venv"
 "$APP/.venv/bin/pip" install -q --upgrade pip
-"$APP/.venv/bin/pip" install -q aiohttp pillow
+"$APP/.venv/bin/pip" install -q aiohttp pillow numpy
 
 if [ ! -f "$ETC/env" ]; then
   cat > "$ETC/env" <<'ENV'

@@ -27,6 +27,8 @@ import jaam_ws                # noqa: E402
 import tg_notify              # noqa: E402
 import accuracy               # noqa: E402
 from live import NewsLoop     # noqa: E402
+import fastforecast           # noqa: E402
+FAST_NP = fastforecast.install()
 from aiohttp import web, WSMsgType   # noqa: E402
 
 log = bs.log
@@ -226,7 +228,7 @@ class Engine(threading.Thread):
         extra = tk.tracker_load(srv.trk, prev) if prev else {}
         srv._prev_lvl.update({int(k): v for k, v in (extra.get("prev_lvl") or {}).items()})
         srv._jaam_ev_seen = float(extra.get("jaam_ev_seen", 0))
-        log(f"tracker: {len(srv.trk.tracks)} цілей з попереднього стану")
+        log(f"tracker: {len(srv.trk.tracks)} цілей з попереднього стану; numpy-прогноз: {'так' if FAST_NP else 'ні'}")
         if not srv.UKRAINEALARM_KEY:
             srv.USE_JAAM = True
             jaam_ws.start(srv.jaam, log)
