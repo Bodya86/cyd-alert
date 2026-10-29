@@ -549,7 +549,7 @@ static char s_ob[OBLAST_COUNT + 1];
 static char s_rg[MAP_REGION_COUNT + 1];
 static lv_color_t s_pal[256];
 static lv_obj_t* s_main = nullptr;
-static lv_obj_t *s_map, *s_lblPlace, *s_lblTime, *s_lblWifi, *s_lblCount, *s_lblCountSub, *s_lblSrc, *s_card, *s_cardBar,
+static lv_obj_t *s_map, *s_lblPlace, *s_lblTime, *s_lblWifi, *s_lblBat, *s_lblCount, *s_lblCountSub, *s_lblSrc, *s_card, *s_cardBar,
     *s_cardTitle, *s_cardText, *s_marker, *s_outBox, *s_outState, *s_outTime, *s_outBar, *s_frame;
 static Level s_uiLevel = LVL_GREEN;      // рівень, яким зараз пофарбовано головний екран
 static Level s_preview = LVL_GREEN;      // тест кольору з налаштувань
@@ -1102,6 +1102,9 @@ static void showMain() {
   lv_obj_set_pos(s_lblPlace, 8, 5);
   s_lblWifi = mkLabel(scr, LV_SYMBOL_WIFI, &font_ua_14, C_MUTED);
   lv_obj_set_pos(s_lblWifi, 210, 5);
+  s_lblBat = mkLabel(scr, "", &font_ua_12, C_MUTED);   // заряд АКБ — лише якщо підключено дільник
+  lv_obj_set_pos(s_lblBat, 160, 6);
+  lv_obj_add_flag(s_lblBat, LV_OBJ_FLAG_HIDDEN);
   s_lblTime = mkLabel(scr, "--:--", &font_ua_18, C_TEXT);
   lv_obj_set_pos(s_lblTime, 232, 2);
   lv_obj_t* gear = lv_btn_create(scr);
@@ -1280,6 +1283,21 @@ static void updateMain(bool full) {
   }
   int wifi = WiFi.status() == WL_CONNECTED;
   if (wifi != lastWifi) { lastWifi = wifi; lv_obj_set_style_text_color(s_lblWifi, col(wifi ? C_GREEN : C_RED), 0); }
+  static int lastBat = -2;
+  if (full) lastBat = -2;
+  int mv = hwBatteryMv(), pct = mv < 0 ? -1 : hwBatteryPct(mv);
+  if (pct != lastBat) {
+    if (pct < 0) { lv_obj_add_flag(s_lblBat, LV_OBJ_FLAG_HIDDEN); lv_obj_set_width(s_lblPlace, 196); }
+    else {
+      const char* ic = pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3 : pct > 30 ? LV_SYMBOL_BATTERY_2
+                     : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+      lv_label_set_text_fmt(s_lblBat, "%s%d%%", ic, pct);
+      lv_obj_set_style_text_color(s_lblBat, col(pct > 50 ? C_GREEN : pct > 20 ? C_YELLOW : C_RED), 0);
+      lv_obj_clear_flag(s_lblBat, LV_OBJ_FLAG_HIDDEN);
+      if (lastBat < 0) lv_obj_set_width(s_lblPlace, 148);
+    }
+    lastBat = pct;
+  }
 
   static AppState snap;   // копія стану — лише коли мережева задача опублікувала нову версію
   stateLock();
@@ -1488,6 +1506,9 @@ static void resetCb(lv_event_t*) {
   }, LV_EVENT_VALUE_CHANGED, nullptr);
 }
 
+#define STR_(x) #x
+#define STR2_(x) STR_(x)
+#define LV_STRINGIFY_PIN STR2_(BAT_ADC_PIN)
 static lv_obj_t* settingRow(lv_obj_t* list, const char* txt) {
   lv_obj_t* r = lv_obj_create(list);
   lv_obj_set_size(r, LV_PCT(100), 42);
@@ -1522,14 +1543,22 @@ static void showSettings() {
   String ou = String("Світло: ") + (g_set.outGroup >= 0 ? String("черга ") + OUTAGE_GROUPS[g_set.outGroup] : String("черга не обрана")) + " · " + om[g_set.outMode];
   mkListBtn(list, LV_SYMBOL_CHARGE, ou.c_str(), setOutCb, nullptr);
 
-  lv_obj_t* r = settingRow(list, "Яскравість");
+  lv_obj_t* r = settingRow(list, "");
+  lv_obj_move_to_index(r, 0);   // яскравість — першим рядком налаштувань
+  static lv_obj_t* s_brLbl;
+  s_brLbl = lv_obj_get_child(r, 0);
+  int pct = (g_set.brightness * 100 + 127) / 255;
+  lv_label_set_text_fmt(s_brLbl, "Яскравість %d%%", pct);
   lv_obj_t* sl = lv_slider_create(r);
-  lv_obj_set_width(sl, 150);
-  lv_obj_align(sl, LV_ALIGN_RIGHT_MID, -6, 0);
-  lv_slider_set_range(sl, 10, 255);
-  lv_slider_set_value(sl, g_set.brightness, LV_ANIM_OFF);
+  lv_obj_set_width(sl, 120);
+  lv_obj_align(sl, LV_ALIGN_RIGHT_MID, -8, 0);
+  lv_obj_set_ext_click_area(sl, 10);
+  lv_slider_set_range(sl, 10, 100);
+  lv_slider_set_value(sl, pct < 10 ? 10 : pct, LV_ANIM_OFF);
   lv_obj_add_event_cb(sl, [](lv_event_t* e) {
-    g_set.brightness = lv_slider_get_value(lv_event_get_target(e)); hwSetBrightness(g_set.brightness);
+    int v = lv_slider_get_value(lv_event_get_target(e));
+    g_set.brightness = (v * 255 + 50) / 100; hwSetBrightness(g_set.brightness);
+    lv_label_set_text_fmt(s_brLbl, "Яскравість %d%%", v);
   }, LV_EVENT_VALUE_CHANGED, nullptr);
   lv_obj_add_event_cb(sl, [](lv_event_t*) { settingsSave(); }, LV_EVENT_RELEASED, nullptr);
 
@@ -1548,6 +1577,21 @@ static void showSettings() {
   lv_obj_add_event_cb(sw, [](lv_event_t* e) {
     g_set.alertOnYellow = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
+
+#if BAT_ADC_PIN >= 0
+  r = settingRow(list, "Заряд АКБ (GPIO" LV_STRINGIFY_PIN ")");
+  sw = lv_switch_create(r);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (g_set.battery) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, [](lv_event_t* e) {
+    g_set.battery = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+    if (g_set.battery) {
+      int mv = hwBatteryMv();
+      if (mv < 0) toast("АКБ не знайдено: перевірте дільник на GPIO" LV_STRINGIFY_PIN);
+      else { static char b[48]; snprintf(b, sizeof b, "АКБ %d.%02d В · %d%%", mv / 1000, mv % 1000 / 10, hwBatteryPct(mv)); toast(b); }
+    }
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+#endif
 
   r = settingRow(list, "Автозум мапи до загрози");
   sw = lv_switch_create(r);

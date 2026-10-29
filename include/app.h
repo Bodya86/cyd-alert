@@ -32,6 +32,7 @@ struct Settings {
   bool alertOnYellow = true;   // звуковий сигнал на жовтому рівні (дрони в області)
   bool autoZoom = true;        // мапа сама наближається до області / району, коли ціль поруч
   bool showRoutes = false;     // шар «типові маршрути» (історична модель) на зумі області
+  bool battery = false;        // показувати заряд АКБ (дільник на BAT_ADC_PIN); без дільника вхід «висить» — тому вимкнено за замовчуванням
   bool autoUpdate = true;      // OTA: самостійно встановлювати нові релізи (не під час загрози)
   // графік відключень світла
   uint8_t outMode = OUT_MODE_AUTO;   // OUT_MODE_OFF / AUTO / MANUAL
@@ -140,6 +141,8 @@ void regionsFromOblasts(AppState& s);         // заповнити regions з o
 // ------------------------------- Модулі -------------------------------
 void hwInit();
 void hwSetBrightness(uint8_t v);
+int hwBatteryMv();          // напруга АКБ, мВ (кеш, оновлення раз на 5 с); -1 — АКБ не підключено
+int hwBatteryPct(int mv);   // заряд LiPo за кривою розряду, 0..100
 void notifyInit();
 void notifyLoop();
 void notifyLevel(Level l, bool near = false);   // запуск звуку/LED для рівня (near — ціль поруч)

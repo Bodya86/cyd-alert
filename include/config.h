@@ -38,6 +38,18 @@
 #define PIN_LDR        34
 #define PIN_BACKLIGHT  21
 
+// Акумулятор (опційно): дільник 100 кОм / 100 кОм від «+» АКБ на вільний вхід ADC1.
+// GPIO35 — роз'єм P3 (лише вхід, ADC1_CH7). -1 — вимкнути індикатор. Можна перевизначити через build_flags.
+#ifndef BAT_ADC_PIN
+#define BAT_ADC_PIN    35
+#endif
+#ifndef BAT_DIV
+#define BAT_DIV        2.0f   // (R1 + R2) / R2
+#endif
+#ifndef BAT_CAL
+#define BAT_CAL        1.0f   // поправка: (напруга мультиметром) / (показ на екрані)
+#endif
+
 // Калібрування тачскріна (сирі значення XPT2046). Можна перекалібрувати з меню.
 #define TOUCH_X_MIN 300
 #define TOUCH_X_MAX 3800

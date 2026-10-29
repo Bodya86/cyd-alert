@@ -53,6 +53,40 @@ static void touchCb(lv_indev_drv_t*, lv_indev_data_t* data) {
 
 void hwSetBrightness(uint8_t v) { ledcWrite(CH_BL, v < 10 ? 10 : v); }
 
+// ---- акумулятор: дільник на BAT_ADC_PIN; висячий вхід (нічого не підключено) дає шум/0 — тоді індикатор ховається
+int hwBatteryMv() {
+#if BAT_ADC_PIN >= 0
+  if (!g_set.battery) return -1;
+  static int mv = -1;
+  static float ema = 0;
+  static uint32_t at = 0;
+  if (at && millis() - at < 5000) return mv;
+  at = millis() | 1;
+  uint32_t sum = 0, lo = 9999, hi = 0;
+  for (int i = 0; i < 16; i++) {
+    uint32_t r = analogReadMilliVolts(BAT_ADC_PIN);
+    sum += r; if (r < lo) lo = r; if (r > hi) hi = r;
+  }
+  float v = sum / 16.0f * BAT_DIV * BAT_CAL;
+  // валідно: 2.5..4.6 В і стабільно (розкид < 120 мВ на піні)
+  if (v < 2500 || v > 4600 || hi - lo > 120) { mv = -1; ema = 0; return mv; }
+  ema = ema > 0 ? ema * 0.7f + v * 0.3f : v;
+  mv = (int)ema;
+  return mv;
+#else
+  return -1;
+#endif
+}
+
+int hwBatteryPct(int mv) {
+  static const int16_t V[] = {3300, 3450, 3550, 3650, 3700, 3750, 3800, 3850, 3920, 4000, 4100, 4180};
+  static const uint8_t P[] = {   0,    5,   10,   20,   30,   40,   50,   60,   70,   80,   90,  100};
+  if (mv <= V[0]) return 0;
+  for (int i = 1; i < 12; i++)
+    if (mv < V[i]) return P[i - 1] + (P[i] - P[i - 1]) * (mv - V[i - 1]) / (V[i] - V[i - 1]);
+  return 100;
+}
+
 void hwInit() {
   tft.begin();
   tft.setRotation(1);  // альбомна, USB праворуч
@@ -60,6 +94,9 @@ void hwInit() {
   ledcSetup(CH_BL, 5000, 8);
   ledcAttachPin(PIN_BACKLIGHT, CH_BL);
   hwSetBrightness(g_set.brightness);
+#if BAT_ADC_PIN >= 0
+  analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);   // до ~3.1 В на піні
+#endif
 
   touchSpi.begin(PIN_TOUCH_CLK, PIN_TOUCH_MISO, PIN_TOUCH_MOSI, PIN_TOUCH_CS);
   ts.begin(touchSpi);
