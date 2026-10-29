@@ -689,28 +689,23 @@ static void mapDrawCb(lv_event_t* e) {
 }
 
 // ---- цілі трекера поверх мапи ----
-// значок за типом (масштаб від зуму), підпис «Шахед x2 · 38 км», пунктир теоретичного курсу з мітками
+// значок за типом (масштаб від зуму), колір = тип (без підписів), пунктир теоретичного курсу з мітками
 // +5/+15/+30 хв, блідий конус невизначеності. Кожна ціль малюється окремо — навіть дві далекі на всю Україну.
 static MapTarget s_tgt[MAX_TARGETS];
 static uint8_t s_ntgt = 0;
 
+// Ціль розрізняється лише кольором (без підписів — при скупченні вони налазили один на одного):
+// дрони — жовтий, крилаті ракети / КАБ — червоний, балістика — малиново-пурпурний, інше / невідомо — помаранчевий.
+#define TC_DRONE   0xFFE135
+#define TC_MISSILE 0xFF2B2B
+#define TC_BALL    0xFF2BD6
+#define TC_OTHER   0xFF8C1A
 static uint32_t targetColor(char ch) {
   switch (ch) {
-    case 'C': return 0xFF4D4F;   // крилата ракета
-    case 'K': return 0xFF8A3D;   // КАБ
-    case 'J': return 0xFFB020;   // реактивний шахед
-    case 'D': return 0x58A6FF;   // розвідувальний
-    default:  return 0xFFD54A;   // шахед / невідомо
-  }
-}
-static const char* targetName(char ch) {
-  switch (ch) {
-    case 'S': return "Шахед";
-    case 'J': return "Реакт.";
-    case 'D': return "Розвід.";
-    case 'C': return "Ракета";
-    case 'K': return "КАБ";
-    default:  return "Ціль";
+    case 'S': case 'J': case 'D': return TC_DRONE;
+    case 'C': case 'K':           return TC_MISSILE;
+    case 'B':                     return TC_BALL;
+    default:                      return TC_OTHER;
   }
 }
 
@@ -739,14 +734,11 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
   const float KM_PX = s_view->scale / 111.0f;      // пікселів на км (широта)
   static const float ICON[3] = {5.5f, 7.0f, 8.5f};
   float S = ICON[s_zoom > 2 ? 2 : s_zoom];
-  float ula = 0, ulo = 0; bool haveU = userPoint(ula, ulo);
   lv_draw_rect_dsc_t cone; lv_draw_rect_dsc_init(&cone);
   cone.radius = LV_RADIUS_CIRCLE; cone.border_width = 0; cone.bg_opa = LV_OPA_10;
   lv_draw_line_dsc_t ln; lv_draw_line_dsc_init(&ln);
   ln.width = s_zoom ? 2 : 1; ln.opa = LV_OPA_90; ln.round_start = 0; ln.round_end = 0;
   lv_draw_line_dsc_t tk = ln; tk.width = 1;
-  lv_draw_label_dsc_t ld; lv_draw_label_dsc_init(&ld);
-  ld.font = &font_ua_12;
   lv_point_t pos[MAX_TARGETS]; bool vis[MAX_TARGETS] = {false};
   // 1) конуси й пунктир — під значками
   for (int k = s_ntgt - 1; k >= 0; k--) {
@@ -770,18 +762,12 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
       lv_point_t q = mapPt(c, t.pla[i], t.plo[i]);
       if (q.x == prev.x && q.y == prev.y) continue;
       dashLine(dc, &ln, prev, q, phase);
-      // мітка часу: короткий поперечний штрих + «5/15/30» (на Україні — лише штрих)
+      // мітка часу +5/+15/+30 хв: короткий поперечний штрих (без тексту)
       float dx = q.x - prev.x, dy = q.y - prev.y, L = sqrtf(dx * dx + dy * dy);
       if (L > 0.5f) {
         dx /= L; dy /= L;
         lv_point_t a1 = {(lv_coord_t)(q.x + 3 * dy), (lv_coord_t)(q.y - 3 * dx)}, a2 = {(lv_coord_t)(q.x - 3 * dy), (lv_coord_t)(q.y + 3 * dx)};
         lv_draw_line(dc, &tk, &a1, &a2);
-        if (s_zoom && t.npt == 3) {
-          static const char* TL[3] = {"5", "15", "30"};
-          lv_area_t la = {(lv_coord_t)(q.x + 4 * dy + 2), (lv_coord_t)(q.y - 4 * dx - 7), (lv_coord_t)(q.x + 4 * dy + 22), (lv_coord_t)(q.y - 4 * dx + 7)};
-          ld.color = tc; ld.opa = LV_OPA_80;
-          lv_draw_label(dc, &ld, &la, TL[i], nullptr);
-        }
       }
       before = prev; prev = q;
     }
@@ -795,7 +781,7 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
     lv_point_t p0 = pos[k];
     lv_draw_rect_dsc_t ic; lv_draw_rect_dsc_init(&ic);
     ic.bg_opa = LV_OPA_COVER; ic.border_width = 0;
-    bool missile = t.ch == 'C' || t.ch == 'K';
+    bool missile = t.ch == 'C' || t.ch == 'K' || t.ch == 'B';
     float hr = (t.hd >= 0 ? t.hd : 0) * 0.0174533f, sx = sinf(hr), sy = -cosf(hr);
     for (int pass = 0; pass < 2; pass++) {
       float s = pass ? S - 1.5f : S;
@@ -816,35 +802,6 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
       }
       lv_draw_polygon(dc, &ic, pts, n);
     }
-  }
-  // 3) підписи: «Шахед x2» (+ «· 38 км» при зумі); зсуваємо вниз, якщо налазять один на одного
-  lv_area_t used[MAX_TARGETS]; int nu = 0;
-  int maxLbl = s_zoom ? MAX_TARGETS : 4;
-  for (int k = 0; k < s_ntgt && k < maxLbl; k++) {
-    if (!vis[k]) continue;
-    const MapTarget& t = s_tgt[k];
-    char buf[40];
-    int n = snprintf(buf, sizeof(buf), "%s", targetName(t.ch));
-    if (t.n > 1) n += snprintf(buf + n, sizeof(buf) - n, " x%d", t.n);
-    if (s_zoom && haveU) snprintf(buf + n, sizeof(buf) - n, " · %d км", (int)(kmBetween(t.lat, t.lon, ula, ulo) + 0.5f));
-    lv_point_t sz; lv_txt_get_size(&sz, buf, &font_ua_12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    int x = pos[k].x + (int)S + 2, y = pos[k].y - 7;
-    if (x + sz.x > c.x2) x = pos[k].x - (int)S - 2 - sz.x;
-    for (int tries = 0; tries < 4; tries++) {
-      lv_area_t a = {(lv_coord_t)x, (lv_coord_t)y, (lv_coord_t)(x + sz.x), (lv_coord_t)(y + sz.y)};
-      bool hit = false;
-      for (int u = 0; u < nu; u++) if (_lv_area_is_on(&a, &used[u])) { hit = true; break; }
-      if (!hit) break;
-      y += sz.y;
-    }
-    lv_area_t a = {(lv_coord_t)x, (lv_coord_t)y, (lv_coord_t)(x + sz.x), (lv_coord_t)(y + sz.y)};
-    used[nu++] = a;
-    lv_draw_rect_dsc_t bg; lv_draw_rect_dsc_init(&bg);
-    bg.bg_color = lv_color_black(); bg.bg_opa = LV_OPA_50; bg.radius = 3; bg.border_width = 0;
-    lv_area_t ba = {(lv_coord_t)(a.x1 - 2), a.y1, (lv_coord_t)(a.x2 + 1), (lv_coord_t)(a.y2 - 1)};
-    lv_draw_rect(dc, &bg, &ba);
-    ld.color = col(targetColor(t.ch)); ld.opa = LV_OPA_COVER;
-    lv_draw_label(dc, &ld, &a, buf, nullptr);
   }
 }
 
@@ -1384,6 +1341,16 @@ static void showDetail() {
     String t4 = fmtTime(s.tgTime) + "  " + s.tgText;
     l = mkLabel(box, t4.c_str(), &font_ua_14, C_TEXT);
     lv_obj_set_width(l, 276); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+  }
+  {  // легенда кольорів цілей на мапі
+    lv_obj_t* lg = lv_obj_create(cont);
+    lv_obj_remove_style_all(lg);
+    lv_obj_set_size(lg, 300, 32);
+    lv_obj_clear_flag(lg, LV_OBJ_FLAG_SCROLLABLE);
+    legendRow(lg, 0, TC_DRONE, "дрони", 0);
+    legendRow(lg, 0, TC_MISSILE, "ракети / КАБ", 80);
+    legendRow(lg, 16, TC_BALL, "балістика", 0);
+    legendRow(lg, 16, TC_OTHER, "інше / невідомо", 80);
   }
   l = mkLabel(cont, "Аналіз автоматичний (ключові слова) і може помилятися. Завжди дійте за офіційними сигналами тривоги.", &font_ua_12, 0x5C6773);
   lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
