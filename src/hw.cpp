@@ -19,7 +19,14 @@ static lv_color_t s_buf[SCR_W * BUF_LINES];
 static lv_color_t* s_buf2 = nullptr;   // другий буфер — з купи (статичної DRAM не вистачає)
 static bool s_dma = false;
 static uint32_t s_lastTouch = 0;
-#define CH_BL 5
+// Підсвітка — окремий канал/таймер LEDC. Раніше був канал 5: у arduino-esp32 2.x таймер = (ch/2)%4, тож канал 5
+// ділив таймер 2 з бузером (канал 4) — кожен ledcWriteTone() перенастроював частоту/розрядність підсвітки
+// (сирена 700–2000 Гц, 10 біт → яскравість падала ~в 4 рази і «пливла») = мерехтіння. Канал 8 — група low-speed,
+// таймер 0, більше ніхто його не використовує. 12 кГц — поза видимим/чутним діапазоном і биттям з розгорткою.
+#define CH_BL 8
+#define BL_FREQ 12000
+#define BL_RES 8
+#define BL_MIN 12   // нижня межа скважності, щоб на мінімумі не було «стробу»
 
 static void flushCb(lv_disp_drv_t* drv, const lv_area_t* a, lv_color_t* px) {
   uint32_t w = a->x2 - a->x1 + 1, h = a->y2 - a->y1 + 1;
@@ -51,7 +58,13 @@ static void touchCb(lv_indev_drv_t*, lv_indev_data_t* data) {
   }
 }
 
-void hwSetBrightness(uint8_t v) { ledcWrite(CH_BL, v < 10 ? 10 : v); }
+void hwSetBrightness(uint8_t v) {
+  static int last = -1;            // пишемо скважність лише при зміні (повзунок шле VALUE_CHANGED на кожен піксель)
+  int d = v < BL_MIN ? BL_MIN : v;
+  if (d == last) return;
+  last = d;
+  ledcWrite(CH_BL, d);
+}
 
 // ---- акумулятор: дільник на BAT_ADC_PIN; висячий вхід (нічого не підключено) дає шум/0 — тоді індикатор ховається
 int hwBatteryMv() {
@@ -91,7 +104,7 @@ void hwInit() {
   tft.begin();
   tft.setRotation(1);  // альбомна, USB праворуч
   tft.fillScreen(TFT_BLACK);
-  ledcSetup(CH_BL, 5000, 8);
+  ledcSetup(CH_BL, BL_FREQ, BL_RES);
   ledcAttachPin(PIN_BACKLIGHT, CH_BL);
   hwSetBrightness(g_set.brightness);
 #if BAT_ADC_PIN >= 0
