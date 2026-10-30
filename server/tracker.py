@@ -381,6 +381,22 @@ def split_post(text):
 
 
 # ---------------- ціль ----------------
+_CH_SIGMA = None
+
+
+def ch_sigma(src):
+    """Множник σ положення за надійністю каналу (data/channel_reliability.json через analyzer); 1.0 — невідомий."""
+    global _CH_SIGMA
+    if _CH_SIGMA is None:
+        try:
+            import analyzer as an
+            _CH_SIGMA = dict(an.CH_SIGMA)
+        except Exception:  # noqa: BLE001
+            _CH_SIGMA = {}
+    ch = src[3:] if isinstance(src, str) and src.startswith("tg:") else src
+    return _CH_SIGMA.get(str(ch).lower(), 1.0) if ch else 1.0
+
+
 class Track:
     _next = 1
 
@@ -766,7 +782,7 @@ class Tracker:
                     touched.append(("new", tr.id))
             return touched
         p = anchors[0]
-        sigma = p["sigma"] + 3.0
+        sigma = (p["sigma"] + 3.0) * ch_sigma(src)
         best, bm = None, 0.0
         for tr in self.tracks:
             if not self._compatible(tr, typ) or tr.id in cues.get("skip", ()):

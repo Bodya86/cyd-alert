@@ -1111,9 +1111,15 @@ static void cardLines(const AppState& s, Level L, String ln[4]) {
     r.replace(" район", " р-н");
     ln[0] += ", " + r;
   }
-  if (L == LVL_GREEN) ln[1] = "Загроз немає";
+  // жовтий/зелений із ціллю поруч: сервер пише «Дрони в області · до нас не летять» (рядки з « · »);
+  // на зеленому беремо лише такі, щоб застарілий «…, місто» не з'явився після відбою
+  bool quiet = s.thr[0] && strstr(s.thr, " · ");
+  if (L == LVL_GREEN) ln[1] = quiet ? String(s.thr) : String("Загроз немає");
   else if (s.thr[0] && strcmp(s.thr, "Загроз немає")) ln[1] = s.thr;
-  else {
+  else if (L == LVL_YELLOW) {
+    bool drone = !strcmp(s.tgKind, "Дрони") || !s.tgKind[0];
+    ln[1] = drone ? String("Дрони в області · до нас не летять") : String(s.tgKind) + " · загроза області";
+  } else {
     bool drone = !strcmp(s.tgKind, "Дрони") || !s.tgKind[0];
     ln[1] = drone ? String("Дрони — Шахед/БпЛА") : String(s.tgKind);
     ln[1] += L == LVL_RED ? ", ваш район" : L == LVL_ORANGE ? ", місто" : ", область";
@@ -1414,7 +1420,11 @@ static void updateMain(bool full) {
     String ln[4];
     cardLines(snap, L, ln);
     // картка: статично 2 з 4 рядків (тип + куди; ймовірність поруч або ймовірна ціль), повністю — у «Деталях»
-    lv_label_set_text(s_cardTitle, preview ? "Тест кольору екрана" : ln[1].c_str());
+    const char* tt = preview ? "Тест кольору екрана" : ln[1].c_str();
+    // довгий рядок (≈ 290 px) — дрібнішим шрифтом, щоб не обрізало «…»
+    const lv_font_t* tf = lv_txt_get_width(tt, strlen(tt), &font_ua_18, 0, LV_TEXT_FLAG_NONE) > 288 ? &font_ua_14 : &font_ua_18;
+    if (lv_obj_get_style_text_font(s_cardTitle, 0) != tf) lv_obj_set_style_text_font(s_cardTitle, tf, 0);
+    lv_label_set_text(s_cardTitle, tt);
     lv_label_set_text(s_cardText, (L > LVL_GREEN && L != LVL_RED && snap.trkOk ? ln[2] : ln[3]).c_str());
   }
   autoZoom(snap);

@@ -11,7 +11,7 @@ void stateLock() { if (!s_mtx) s_mtx = xSemaphoreCreateRecursiveMutex(); xSemaph
 void stateUnlock() { xSemaphoreGiveRecursive(s_mtx); }
 
 const char* levelName(Level l) {
-  switch (l) { case LVL_RED: return "НЕБЕЗПЕКА"; case LVL_ORANGE: return "КУРС НА МІСТО"; case LVL_YELLOW: return "ЗАГРОЗА"; default: return "ЧИСТО"; }
+  switch (l) { case LVL_RED: return "НЕБЕЗПЕКА"; case LVL_ORANGE: return "КУРС НА МІСТО"; case LVL_YELLOW: return "УВАГА"; default: return "ЧИСТО"; }
 }
 
 void settingsLoad() {

@@ -67,6 +67,38 @@ KIND_TXT = {"drone": "Дрони — Шахед/БпЛА", "missile": "Раке�
             "kinzhal": "Балістика — Кинджал", "gerbera": "Дрони — Гербера (імітатор)", "jet": "Реактивні шахеди",
             "lancet": "Дрони — Ланцет/FPV", "recon": "Розвідувальний БпЛА", "mig31k": "Авіація — зліт МіГ-31К",
             "strat": "Стратегічна авіація"}
+# жовтий / зелений, але поруч щось є: коротко «що й де» замість «Загроз немає» / «…, область» (рішення 30.10)
+QUIET_SHORT = {"drone": "Дрони", "shahed": "Дрони", "gerbera": "Дрони", "lancet": "Дрони", "unknown": "Дрони",
+               "jet": "Дрони", "recon": "Розвідник", "missile": "Ракети", "cruise": "Ракети",
+               "banderol": "Ракети", "kh22": "Ракети", "s300": "Ракети", "ballistic": "Балістика", "kinzhal": "Балістика",
+               "kab": "КАБ", "aircraft": "Авіація", "mig31k": "Авіація", "strat": "Авіація"}
+QUIET_PLURAL = {"Дрони", "Ракети"}
+QUIET_EVENT = {"Балістика", "КАБ", "Авіація"}       # куди летить — невідомо, не обіцяємо «не летить»
+QUIET_KM = 110                                        # «в області» для зеленого: ціль ≤ N км від адреси
+
+
+def quiet_thr(final, scope, kind, tg, obl_alert):
+    """Рядок 2 для жовтого/зеленого рівня: «Дрони в області · до нас не летять», «Тривога в області · загрози місту немає».
+    None — лишити як є (помаранчевий/червоний, жовтий зі scope «місто»)."""
+    def phrase(short, where):
+        if short in QUIET_EVENT:
+            return f"{short} · загроза {'району' if where == 'raion' else 'області'}"
+        verb = "не летять" if short in QUIET_PLURAL else "не летить"
+        return f"{short} у районі · на місто {verb}" if where == "raion" else f"{short} в області · до нас {verb}"
+    if final == an.YELLOW and scope in ("oblast", "raion", ""):
+        return phrase(QUIET_SHORT.get(kind, "Дрони"), scope or "oblast")
+    if final == an.GREEN:
+        near = [d for d in tg or [] if d.get("dist_km") is not None and d["dist_km"] <= QUIET_KM]
+        near.sort(key=lambda d: ("recon" in (d.get("cls"), d.get("type")), d["dist_km"]))
+        if near:
+            d = near[0]
+            short = QUIET_SHORT.get(d.get("type"), "Ракети" if d.get("cls") == "missile" else "Дрони")
+            return phrase(short, "oblast")
+        if obl_alert:
+            return "Тривога в області · місту не загрожує"
+    return None
+
+
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
@@ -571,6 +603,7 @@ def state(q):
         elif near and len(set(near)) == 1 and near[0] in KIND_TXT:
             kind = near[0]
     thr = (KIND_TXT.get(kind, "Ціль") + (", " + SCOPE_TXT[scope] if scope else "")) if final > an.GREEN else "Загроз немає"
+    thr = quiet_thr(final, scope, kind, tg, obl_alert) or thr
     # новини про влучання — лише інформація: де б'ють останнім часом (рівень НЕ змінюють)
     nw = None
     ulat0, ulon0, _ = user_point(q)

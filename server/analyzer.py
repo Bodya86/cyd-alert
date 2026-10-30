@@ -54,6 +54,30 @@ def is_report(t):
     return bool(RETRO_STRONG_RE.search(t)) or (bool(RETRO_RE.search(t)) and bool(RETRO_HINT_RE.search(t)) and not LIVE_RE.search(t))
 LOC = _load("locations.json")
 CHANNELS_CFG = _load("channels.json")["channels"]
+CHANNELS_CFG_PRIOR = [dict(c) for c in CHANNELS_CFG]     # ручні ваги (апріорні для tools/channel_reliability.py)
+
+
+def load_reliability(cfg=CHANNELS_CFG, path=None):
+    """data/channel_reliability.json (оцінка з архіву, стягнута до ручної ваги) → перекриває weight каналу.
+    Вимкнути: CYD_CH_REL=0. → {канал: множник σ для трекера}."""
+    if os.environ.get("CYD_CH_REL", "1") == "0":
+        return {}
+    try:
+        rel = json.load(open(path or os.path.join(DATA, "channel_reliability.json"), encoding="utf-8"))["channels"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    rl = {k.lower(): v for k, v in rel.items()}
+    for c in cfg:
+        r = rl.get(c["id"].lower())
+        # офіційні (ПС ЗСУ, ОВА) лишаються з ручною вагою: їхні пости — підстава тривоги, а не лише точка на мапі;
+        # решта — не далі ±0.15 від ручної (щоб одна оцінка не перекинула канал через поріг «малої довіри» 0.5)
+        if r and isinstance(r.get("weight"), (int, float)) and c.get("kind") != "official":
+            w0 = c.get("weight", 0.5)
+            c["weight"] = round(min(w0 + 0.15, max(w0 - 0.15, float(r["weight"]))), 3)
+    return {k: float(v.get("sigma_mult", 1.0)) for k, v in rl.items()}
+
+
+CH_SIGMA = load_reliability()
 CHANNELS = {c["id"].lower(): c for c in CHANNELS_CFG}
 OBLAST_KW = {int(k): [fold_kw(w) for w in v] for k, v in RULES.get("oblast_kw", {}).items()}
 CITIES = {c["id"]: c for c in LOC["cities"]}
