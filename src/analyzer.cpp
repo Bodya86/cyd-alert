@@ -111,15 +111,122 @@ bool channelIsLocal(const char* ch, const CityDef* city) {
   return false;
 }
 
+// ---- прогноз / попередження / новина (= server/analyzer.py FORECAST_RE / LIVE_NOW_RE / SIGNATURE_RE) ----
+// «США попередили про можливу масовану атаку протягом 48 годин», «за даними розвідки переміщення Іскандерів» —
+// не ціль зараз (30.10 16:31 хибний червоний у Кременчуці). Текст — у utf8Fold-формі (слова через один пробіл).
+static const char* wordStart(const char* t, const char* p) { while (p > t && p[-1] != ' ') p--; return p; }
+static const char* nextWord(const char* p) {          // початок наступного слова або nullptr
+  p = strchr(p, ' ');
+  if (!p) return nullptr;
+  while (*p == ' ') p++;
+  return *p ? p : nullptr;
+}
+static bool startsAny(const char* w, const char* const* pre, int n) {
+  for (int i = 0; i < n; i++) if (!strncmp(w, pre[i], strlen(pre[i]))) return true;
+  return false;
+}
+static bool wordEq(const char* w, const char* s) { size_t l = strlen(s); return !strncmp(w, s, l) && (w[l] == ' ' || !w[l]); }
+// слово з основою stem (точні закінчення ends, якщо задані), за ним через ≤gap слів — слово з однією з основ next
+static int stemThen(const char* t, const char* stem, const char* const* ends, int ne, int gap, const char* const* next, int nn) {
+  int hits = 0;
+  size_t sl = strlen(stem);
+  for (const char* p = strstr(t, stem); p; p = strstr(p + 1, stem)) {
+    if (wordStart(t, p) != p) continue;
+    const char* e = p + sl;
+    if (ne) {
+      bool ok = false;
+      for (int i = 0; i < ne && !ok; i++) { size_t l = strlen(ends[i]); ok = !strncmp(e, ends[i], l) && (e[l] == ' ' || !e[l]); }
+      if (!ok) continue;
+    }
+    const char* w = p;
+    for (int k = 0; k <= gap && (w = nextWord(w)); k++)
+      if (startsAny(w, next, nn)) { hits++; break; }
+  }
+  return hits;
+}
+static int forecastMarks(const char* t) {
+  static const char* const SUB[] = {"попередил", "предупредил", "попереджа", "предупрежда", "протягом найближчих",
+      "протягом наступних", "в течении ближайших", "в течение ближайших", "в течении следующих", "в течение следующих",
+      "за даними розвидк", "за даними гур", "за даними сзр", "за даними захидн", "по данним разведк", "по данним гур",
+      "перемищенн", "перемещени", "розгорта", "развертивани", "прогноз", "аналитик", "експерт", "эксперт"};
+  int n = 0;
+  for (auto s : SUB) for (const char* p = strstr(t, s); p; p = strstr(p + strlen(s), s)) n++;
+  static const char* const ATAK[] = {"атак"};
+  static const char* const E_UA[] = {"а", "у", "ий", "ого", "е", "ои", "им"};
+  static const char* const E_RU[] = {"ая", "ую", "ий", "ого", "ое", "ой"};
+  n += stemThen(t, "можлив", E_UA, 7, 2, ATAK, 1);
+  n += stemThen(t, "возможн", E_RU, 6, 2, ATAK, 1);
+  static const char* const MAS_UA[] = {"масован"};
+  static const char* const MAS_RU[] = {"массирован", "масирован"};
+  n += stemThen(t, "загроз", nullptr, 0, 0, MAS_UA, 1) + stemThen(t, "угроз", nullptr, 0, 0, MAS_RU, 2);
+  static const char* const STRIKE[] = {"масован", "массирован", "удар", "атак"};
+  n += stemThen(t, "готу", nullptr, 0, 1, STRIKE, 4) + stemThen(t, "готовит", nullptr, 0, 1, STRIKE, 4);
+  static const char* const REP[] = {"повидомл", "фиксу"};
+  n += stemThen(t, "розвидк", nullptr, 0, 0, REP, 2);
+  static const char* const UNITS[] = {"годин", "дн", "доб", "час", "сут"};
+  for (const char* p = strstr(t, "найближч"); p; p = strstr(p + 1, "найближч")) {
+    const char* w = nextWord(p);
+    if (w && *w >= '0' && *w <= '9') { while (*w >= '0' && *w <= '9') w++; while (*w == ' ') w++; if (startsAny(w, UNITS, 3)) n++; }
+  }
+  for (const char* p = strstr(t, "ближайш"); p; p = strstr(p + 1, "ближайш")) {
+    const char* w = nextWord(p);
+    if (w && *w >= '0' && *w <= '9') { while (*w >= '0' && *w <= '9') w++; while (*w == ' ') w++; if (startsAny(w, UNITS + 3, 2) || startsAny(w, UNITS + 1, 1)) n++; }
+  }
+  return n;
+}
+static bool liveNow(const char* t) {
+  static const char* const SUB[] = {"курс", "пидлит", "подлет", "пидльот", "летит", "летить", "летять", "летят", "укрит",
+      "вибух", "взрив", "запуск", "зараз", "сейчас", "терминово", "срочно", "над мистом", "над городом",
+      "над нами", "злит", "злет", "взлет"};
+  for (auto s : SUB) if (strstr(t, s)) return true;
+  for (const char* p = strstr(t, "пуск"); p; p = strstr(p + 1, "пуск"))
+    if (wordStart(t, p) == p && (wordEq(p, "пуск") || wordEq(p, "пуски") || wordEq(p, "пускив") || wordEq(p, "пусков"))) return true;
+  for (const char* p = t; *p; p++) {                  // «через 30-50 хв», «5 мин»
+    if (!(*p >= '0' && *p <= '9') || (p > t && p[-1] >= '0' && p[-1] <= '9')) continue;
+    const char* q = p;
+    while (*q >= '0' && *q <= '9') q++;
+    while (*q == ' ') q++;
+    if (*q == '-') { q++; while (*q == ' ') q++; while (*q >= '0' && *q <= '9') q++; while (*q == ' ') q++; }
+    if (!strncmp(q, "хв", strlen("хв")) || !strncmp(q, "мин", strlen("мин"))) return true;
+  }
+  return false;
+}
+bool isForecastPost(const char* folded) {
+  int n = forecastMarks(folded);
+  return n >= 3 || (n >= 1 && !liveNow(folded));
+}
+static size_t u8len(const char* s, size_t n) { size_t c = 0; for (size_t i = 0; i < n; i++) if ((s[i] & 0xC0) != 0x80) c++; return c; }
+// підпис каналу внизу («📣 ППО Полтавщина») — не місце події: обрізати (out — копія тексту)
+void stripSignature(const char* in, char* out, size_t outSize) {
+  strlcpy(out, in ? in : "", outSize);
+  static const char* const EM[] = {"\xF0\x9F\x93\xA3", "\xF0\x9F\x93\xA2", "\xF0\x9F\x91\x89"};   // 📣 📢 👉
+  char* cut = nullptr;
+  for (auto e : EM) for (char* p = strstr(out, e); p; p = strstr(p + 1, e)) if (!cut || p > cut) cut = p;
+  if (!cut) return;
+  const char* tail = cut + 4;
+  while (*tail == ' ' || *tail == '\t') tail++;
+  size_t tl = strlen(tail);
+  while (tl && (tail[tl - 1] == ' ' || tail[tl - 1] == '\n' || tail[tl - 1] == '\r' || tail[tl - 1] == '\t')) tl--;
+  if (memchr(tail, '\n', tl) || u8len(tail, tl) > 40) return;
+  for (const char* q = tail; q < tail + tl; q++)      // інший 📣/📢 у хвості — не підпис
+    if (!strncmp(q, EM[0], 4) || !strncmp(q, EM[1], 4)) return;
+  while (cut > out && (cut[-1] == ' ' || cut[-1] == '\n' || cut[-1] == '\r' || cut[-1] == '\t')) cut--;
+  *cut = 0;
+}
+
 PostEval analyzePost(const char* text, const CityDef* city, int district, bool remote, int homeArg) {
   PostEval ev;
   bool home = homeArg < 0 ? !remote : homeArg != 0;
   static char low[TG_TEXT_MAX * 2];
+  static char raw[TG_TEXT_MAX * 2];
+  stripSignature(text, raw, sizeof(raw));
+  text = raw;
   utf8Fold(text, low, sizeof(low));
 
   // 1) реклама / вакансії
   int ign = countWords(low, RULE_IGNORE.w, RULE_IGNORE.n);
   if (ign >= 2 || (ign >= 1 && strlen(low) > 350)) { ev.ignored = true; return ev; }
+  if (isForecastPost(low)) { ev.ignored = true; strlcpy(ev.reason, "попередження / прогноз, не ціль зараз", sizeof(ev.reason)); return ev; }
 
   // 2) тип загрози
   // вага — максимальна серед знайдених; тип (рівень) — найнебезпечніший
@@ -277,7 +384,12 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
     bool ballisticObl = best >= 0 && !strcmp(THREATS[best].type, "ballistic") && oblHit;
     ev.level = levelOf(ev.cls, ev.prox, ev.oblastWide || ballisticObl, settlBonus > 0);
     if (best >= 0 && THREATS[best].cap && ev.level > THREATS[best].cap) ev.level = (Level)THREATS[best].cap;   // розвідник ≤ жовтий
-    ev.explicitCity = inCity || distBonus || settlBonus >= 2 || ev.oblastWide || ballisticObl;
+    if (best >= 0 && !strcmp(THREATS[best].type, "ballistic"))
+      // балістика без офіційної тривоги: лише пост прямо про ваше місто/район (курс/вибухи або короткий «Балістика на
+      // Кременчук!»); «балістика на область» / «хз звідки» — червоний тільки з тривогою в області (capLevel)
+      ev.explicitCity = (inCity || distBonus || settlBonus >= 2) && (approach || escalate || u8len(low, strlen(low)) <= 200);
+    else
+      ev.explicitCity = inCity || distBonus || settlBonus >= 2 || ev.oblastWide || ballisticObl;
   }
   return ev;
 }

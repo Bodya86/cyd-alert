@@ -1127,7 +1127,8 @@ static void cardLines(const AppState& s, Level L, String ln[4]) {
     // буває й від ракет/КАБ в області без курсу (рішення 30.10)
     bool drone = !strcmp(s.tgKind, "Дрони") || !s.tgKind[0];
     ln[1] = drone ? String("Дрони") : String(s.tgKind);
-    if (L == LVL_RED) ln[1] += " · загроза вашому району";
+    // червоний без курсу на місто/район (балістика на область) — не «загроза вашому району» (= server zone_of)
+    if (L == LVL_RED) ln[1] += (s.tgExplicit || s.offLevel > LVL_GREEN) ? " · загроза вашому району" : " · в області, ризик для міста";
     else if (drone) ln[1] += String(" · курс на ") + (c ? c->name : "місто");   // дрони дають помаранчевий лише за курсом на місто
     else ln[1] += " · в області, ризик для міста";
   }

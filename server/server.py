@@ -109,20 +109,22 @@ def city_acc(name):
 THR_MAX = 36   # символів: довше — коротка назва типу («Дрони · курс на Кременчук»), щоб влізло в рядок картки
 
 
-def zone_of(final, scope):
+def zone_of(final, scope, official=False):
     """Що реально відомо (рішення 30.10, «Балістика, місто» читалось як «летить на місто»):
     district — червоний; course — помаранчевий із курсом/близькістю до міста (пост або трекер);
     risk — помаранчевий без курсу (ракети/КАБ/балістика в області); oblast — жовтий; "" — зелений."""
     if final >= an.RED:
-        return "district"
+        # червоний без курсу на місто/район (балістика на область, ракети в області) — не «загроза вашому району»
+        # (30.10 16:31 хибне «Балістика · загроза вашому району» від scope=oblast); офіційна тривога у вашому районі — так
+        return "district" if (scope in ("city", "district") or official) else "risk"
     if final == an.ORANGE:
         return "course" if scope in ("city", "district") else "risk"
     return "oblast" if final == an.YELLOW else ""
 
 
-def threat_line(final, scope, kind, city_name):
+def threat_line(final, scope, kind, city_name, official=False):
     """Рядок 2 (помаранчевий/червоний, жовтий без «тихого» тексту): «<Тип> · <що відомо>»."""
-    z = zone_of(final, scope)
+    z = zone_of(final, scope, official)
     if not z:
         return "Загроз немає"
     tail = {"district": "загроза вашому району", "course": "курс на " + city_acc(city_name),
@@ -658,9 +660,9 @@ def state(q):
         elif near and len(set(near)) == 1 and near[0] in KIND_TXT:
             kind = near[0]
     _cdef = an.CITIES.get(city) if city else None
-    thr = threat_line(final, scope, kind, (_cdef or {}).get("name", ""))
+    thr = threat_line(final, scope, kind, (_cdef or {}).get("name", ""), official)
     thr = quiet_thr(final, scope, kind, tg, obl_alert) or thr
-    zone = zone_of(final, scope)
+    zone = zone_of(final, scope, official)
     # новини про влучання — лише інформація: де б'ють останнім часом (рівень НЕ змінюють)
     nw = None
     ulat0, ulon0, _ = user_point(q)

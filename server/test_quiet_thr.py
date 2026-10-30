@@ -29,7 +29,13 @@ class QuietThr(unittest.TestCase):
 
 
     def test_threat_line(self):   # 30.10: «Балістика, місто» читалось як «летить на місто»
-        self.assertEqual(s.threat_line(an.RED, "oblast", "ballistic", "Кременчук"), "Балістика · загроза вашому району")
+        self.assertEqual(s.threat_line(an.RED, "oblast", "ballistic", "Кременчук"), "Балістика · в області, ризик для міста")
+        self.assertEqual(s.threat_line(an.RED, "oblast", "ballistic", "Кременчук", True), "Балістика · загроза вашому району")
+        self.assertEqual(s.threat_line(an.RED, "city", "missile", "Кременчук"), "Ракети · загроза вашому району")
+        self.assertEqual(s.zone_of(an.RED, "oblast"), "risk")
+        self.assertEqual(s.zone_of(an.RED, "raion"), "risk")
+        self.assertEqual(s.zone_of(an.RED, "raion", True), "district")
+        self.assertEqual(s.zone_of(an.RED, "district"), "district")
         self.assertEqual(s.threat_line(an.ORANGE, "city", "drone", "Кременчук"), "Дрони · курс на Кременчук")
         self.assertEqual(s.threat_line(an.ORANGE, "city", "kab", "Полтава"), "КАБ · курс на Полтаву")
         self.assertEqual(s.threat_line(an.ORANGE, "oblast", "ballistic", "Кременчук"), "Балістика · в області, ризик для міста")

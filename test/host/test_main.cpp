@@ -52,6 +52,23 @@ int main(int argc, char** argv) {
   outageTests();
   // ЗЕЛЕНИЙ = чисто, ЖОВТИЙ = загроза в області, ПОМАРАНЧЕВИЙ = курс на місто, ЧЕРВОНИЙ = ваш район / ракети поруч
   for (const Case& c : CASES) expect(c.t, c.d, c.l, c.near, c.far, c.ow, c.ch);   // test/analyzer_cases.json
+  {  // 30.10 16:31 хибний червоний: прогноз-новина, підпис каналу, «балістика на область» без тривоги — не explicitCity
+    const CityDef* k = city("kremenchuk");
+    PostEval e = analyzePost("США попередили Україну про можливу масовану ракетну атаку протягом найближчих 48 годин За даними "
+                             "розвідки, зафіксовано переміщення шести ракет «Іскандер» 📣 ППО Полтавщина", k, -1, false, 0);
+    check(e.ignored && e.level == LVL_GREEN && !e.explicitCity, "forecast post ignored");
+    e = analyzePost("Балістика на Полтавщину! 📣 ППО Полтавщина", k, -1, false, 0);
+    check(e.level == LVL_RED && !e.explicitCity && capLevel(e.level, false, e.explicitCity) == LVL_YELLOW, "ballistic oblast capped w/o alert");
+    e = analyzePost("Іскандер-М балістика 📣 ППО Полтавщина", k, -1, false, 0);
+    check(!e.explicitCity, "signature is not a location");
+    e = analyzePost("Балістика на Кременчук!", k, -1, false, 1);
+    check(e.level == LVL_RED && e.explicitCity, "ballistic on city explicit");
+    e = analyzePost("Загроза балістики! Можлива атака, всім в укриття", k, -1, false, 0);
+    check(!e.ignored, "live warning not ignored");
+    check(!isForecastPost(" совершени первие пусковие маневри со всех бортов ракети ждем в течении следующих 30-50 минут "), "launch in N min is live");
+    char sb[96]; stripSignature("Шахед на Полтаву 📣 ППО Полтавщина", sb, sizeof(sb));
+    check(!strcmp(sb, "Шахед на Полтаву"), "strip signature");
+  }
   {  // балістика «хз звідки» — червоний 10 хв; «харьков ракета» — лише інформація
     static TgPost fp[2];
     time_t now = 1800000000;
