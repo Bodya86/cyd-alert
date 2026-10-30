@@ -123,14 +123,33 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
 
   // 2) тип загрози
   // вага — максимальна серед знайдених; тип (рівень) — найнебезпечніший
+  // mask: підтип, що збігся, прибирає загальні слова лише для визначення типу («розвідувальний БпЛА» → не шахед)
+  // (записи з mask оцінюються по повному тексту — mhit)
+  bool masked = false;
+  uint32_t mhit = 0;
+  static_assert(THREAT_COUNT <= 32, "mhit — 32 біти");
+  for (int i = 0; i < THREAT_COUNT; i++) {
+    if (!THREATS[i].nmask) continue;
+    if (!countWords(low, THREATS[i].kw, THREATS[i].nkw) && !fuzzyAny(low, THREATS[i].fz, THREATS[i].nfz)) continue;
+    mhit |= 1u << i;
+  }
+  for (int i = 0; i < THREAT_COUNT; i++) {
+    if (!(mhit & (1u << i))) continue;
+    for (int j = 0; j < THREATS[i].nmask; j++) {
+      size_t L = strlen(THREATS[i].mask[j]);
+      for (char* q = strstr(low, THREATS[i].mask[j]); q; q = strstr(q + L, THREATS[i].mask[j])) { memset(q, ' ', L); masked = true; }
+    }
+  }
   int threatW = 0, best = -1;
   for (int i = 0; i < THREAT_COUNT; i++) {
-    if (!countWords(low, THREATS[i].kw, THREATS[i].nkw) && !fuzzyAny(low, THREATS[i].fz, THREATS[i].nfz)) continue;
+    if (THREATS[i].nmask ? !(mhit & (1u << i))
+                         : (!countWords(low, THREATS[i].kw, THREATS[i].nkw) && !fuzzyAny(low, THREATS[i].fz, THREATS[i].nfz))) continue;
     if (THREATS[i].weight > threatW) threatW = THREATS[i].weight;
     if (best < 0 || THREATS[i].level > THREATS[best].level ||
         (THREATS[i].level == THREATS[best].level && THREATS[i].weight > THREATS[best].weight)) best = i;
   }
   const char* threatLabel = best >= 0 ? THREATS[best].label : nullptr;
+  if (masked) utf8Fold(text, low, sizeof(low));   // решта аналізу — по повному тексту
 
   bool approach = countWords(low, RULE_APPROACH.w, RULE_APPROACH.n) > 0;
   bool escalate = countWords(low, RULE_ESCALATE.w, RULE_ESCALATE.n) > 0;
@@ -257,6 +276,7 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
     else if (inCity || settlBonus >= 2 || ev.near) ev.prox = 1;
     bool ballisticObl = best >= 0 && !strcmp(THREATS[best].type, "ballistic") && oblHit;
     ev.level = levelOf(ev.cls, ev.prox, ev.oblastWide || ballisticObl, settlBonus > 0);
+    if (best >= 0 && THREATS[best].cap && ev.level > THREATS[best].cap) ev.level = (Level)THREATS[best].cap;   // розвідник ≤ жовтий
     ev.explicitCity = inCity || distBonus || settlBonus >= 2 || ev.oblastWide || ballisticObl;
   }
   return ev;

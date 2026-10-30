@@ -59,8 +59,14 @@ NEWS_EVENTS = []          # news.NewsHits.events() — оновлює live.py (�
 SCOPE_TXT = {"oblast": "область", "raion": "район", "city": "місто", "district": "ваш район"}
 SCOPE_LVL = {"oblast": an.YELLOW, "raion": an.YELLOW, "city": an.ORANGE, "district": an.RED}
 SCOPE_MIN_P = {"oblast": 0.3, "raion": 0.25, "city": 0.15, "district": 0.3}
+# назва типу (рядок 2 на екрані, ≤ ~30 символів; thr на пристрої — 72 байти). Ключі: тип/підтип аналізатора
+# (rules.json type/sub) і тип трекера (tracker.TYPES).
 KIND_TXT = {"drone": "Дрони — Шахед/БпЛА", "missile": "Ракети", "ballistic": "Балістика", "kab": "КАБ",
-            "aircraft": "Авіація", "generic": "Ціль", "banderol": "Ракети — Бандероль"}
+            "aircraft": "Авіація", "generic": "Ціль", "banderol": "Ракети — Бандероль",
+            "cruise": "Крилаті ракети", "kh22": "Ракети — Х-22/Онікс", "s300": "Ракети — С-300/С-400",
+            "kinzhal": "Балістика — Кинджал", "gerbera": "Дрони — Гербера (імітатор)", "jet": "Реактивні шахеди",
+            "lancet": "Дрони — Ланцет/FPV", "recon": "Розвідувальний БпЛА", "mig31k": "Авіація — зліт МіГ-31К",
+            "strat": "Стратегічна авіація"}
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
@@ -483,7 +489,7 @@ def state(q):
         kept.append(d)
         pts = [p for p in d["path"] if p][1:]
         pts = [pts[i] for i in (0, 2, 4) if i < len(pts)] if len(pts) >= 5 else pts[:3]   # 5, 15, 30 хв
-        compact.append({"c": d["ch"], "la": d["lat"], "lo": d["lon"], "hd": d["heading"] if d["heading_conf"] >= 0.3 else -1,
+        compact.append({"c": d.get("lc", d["ch"]), "k": d["ch"], "la": d["lat"], "lo": d["lon"], "hd": d["heading"] if d["heading_conf"] >= 0.3 else -1,
                         "p": round(d["p"][30] * 100), "e": round(d["eta_min"]) if d["eta_min"] is not None else -1,
                         "n": d["count"], "pt": [[p[0], p[1], round(min(p[2], 99))] for p in pts],
                         "tr": trail_compact(d)})
@@ -495,16 +501,20 @@ def state(q):
             lt, lp = d["likely"]["name"], round(d["likely"]["p"] * 100)
             break
     # тип загрози + зона (рядок 2 на екрані): «Дрони — Шахед/БпЛА, місто»
-    kind = ev.threat if (lvl > an.GREEN and ev.threat) else ""
+    kind = (ev.sub if ev.sub in KIND_TXT else ev.threat) if (lvl > an.GREEN and ev.threat) else ""
     if not kind and tg and final > an.GREEN:
-        d0 = tg[0]
+        d0 = next((d for d in tg if d["cls"] != "recon"), tg[0])
         kind = d0["type"] if d0["type"] in KIND_TXT else ("drone" if d0["cls"] == "drone" else "missile")
     if not kind and final > an.GREEN:
         kind = "missile" if off_lvl >= an.ORANGE else "drone"
-    # мКР «Бандероль» — окремий підпис: пост про неї або ракетна ціль трекера поруч саме цього типу
-    if kind == "missile" and ((lvl > an.GREEN and ev.sub == "banderol") or
-                              any(d["type"] == "banderol" and d["p"][30] >= 0.05 for d in tg[:6])):
-        kind = "banderol"
+    # уточнення загального типу підтипом трекера поруч (мКР «Бандероль», Х-22, реактивні, Гербера...)
+    if kind in ("missile", "drone"):
+        cls = "missile" if kind == "missile" else "drone"
+        near = [d["type"] for d in tg[:6] if d["cls"] == cls and d["p"][30] >= 0.05]
+        if cls == "missile":       # особливий підтип ракети поруч — пріоритетніше за загальне «Ракети»
+            kind = next((k for k in ("kh22", "banderol") if k in near), kind)
+        elif near and len(set(near)) == 1 and near[0] in KIND_TXT:
+            kind = near[0]
     thr = (KIND_TXT.get(kind, "Ціль") + (", " + SCOPE_TXT[scope] if scope else "")) if final > an.GREEN else "Загроз немає"
     # новини про влучання — лише інформація: де б'ють останнім часом (рівень НЕ змінюють)
     nw = None

@@ -4,7 +4,8 @@
 struct WordList { const char* const* w; uint8_t n; };
 struct OblastDef { const char* name; const char* shortName; uint8_t uid; const char* ubilling; };
 struct ThreatDef { const char* type; const char* label; const char* kind; uint8_t weight; uint8_t level; const char* const* kw; uint8_t nkw;
-                   const char* const* fz; uint8_t nfz; };  // fz — нечіткі основи («=слово» — точний збіг слова)
+                   const char* const* fz; uint8_t nfz;   // fz — нечіткі основи («=слово» — точний збіг слова)
+                   const char* const* mask; uint8_t nmask; uint8_t cap; };  // mask — слова, що прибираються для типу; cap — макс. рівень (0 — без)
 struct PlaceDef { const char* name; float lat, lon; const char* const* kw; uint8_t nkw; };   // великі міста UA/RU назвами  // level: 1 жовтий, 2 червоний
 struct OutageProvDef { const char* id; const char* name; uint8_t type; const char* url; uint32_t oblMask; };  // type: 0 gpv, 1 yasno
 struct DistrictDef { const char* id; const char* name; int16_t sector; const char* const* kw; uint8_t nkw; };

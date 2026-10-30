@@ -20,18 +20,37 @@ N = 300
 KM_LAT = 110.57
 TWO_PI = 2 * math.pi
 
-# тип: швидкість (μ, σ) км/год, σ курсу °/√хв, час життя без спостережень, клас, дальність (км), підпис, символ
+# тип: швидкість (μ, σ) км/год, σ курсу °/√хв, час життя без спостережень, клас, дальність (км), підпис,
+# ch — символ кольору на мапі (пристрій ≥1.3.12 / TG; без підписів, лише колір; дрони — фіолетова гама),
+# lc — старий символ для прошивок ≤1.3.11 (S/J/D/U/C/K/B). cls: drone / missile / recon (розвідник — відстежується
+# і показується, але НЕ входить у p_drone/p_any і сам не дає помаранчевий/червоний).
+# Швидкості: відкриті дані + бектест (медіана з логів: шахед ~210, реактивний ~300, Бандероль ~380 км/год — оцінки
+# з постів занижені через затримки/непрямий шлях).
 TYPES = {
-    "shahed":    dict(v=(170, 15),  turn=3, ttl=35 * 60, cls="drone",   rng=None, label="Шахед",            ch="S"),
-    "jet":       dict(v=(450, 60),  turn=2,  ttl=15 * 60, cls="drone",   rng=None, label="Реактивний шахед", ch="J"),
-    "recon":     dict(v=(120, 25),  turn=6, ttl=35 * 60, cls="drone",   rng=None, label="Розвідник",        ch="D"),
-    "unknown":   dict(v=(200, 80),  turn=4, ttl=25 * 60, cls="drone",   rng=None, label="Ціль",             ch="U"),
-    "cruise":    dict(v=(800, 80),  turn=1.5, ttl=12 * 60, cls="missile", rng=None, label="Крилата ракета",   ch="C"),
+    "shahed":    dict(v=(170, 15),  turn=3, ttl=35 * 60, cls="drone",   rng=None, label="Шахед/Герань-2",   ch="S", lc="S"),
+    # «Гербера»/«Пародія» — дешеві дрони-імітатори (пінопласт/фанера), ~150–180 км/год, летять разом із шахедами
+    "gerbera":   dict(v=(160, 20),  turn=3, ttl=30 * 60, cls="drone",   rng=None, label="Гербера (імітатор)", ch="G", lc="S"),
+    # Герань-3 / реактивний Shahed-238: 350–550 км/год (бектест: медіана ~300, калібровано 350±80 у model_params)
+    "jet":       dict(v=(450, 60),  turn=2,  ttl=15 * 60, cls="drone",   rng=None, label="Реактивний шахед", ch="J", lc="J"),
+    # Ланцет / FPV / «Молнія» — ударні дрони прифронтової зони (до ~70 км), 80–130 км/год, пікірування до 300
+    "lancet":    dict(v=(110, 30),  turn=6, ttl=15 * 60, cls="drone",   rng=70,   label="Ланцет/FPV",       ch="L", lc="S"),
+    # Орлан-10/30, Zala, Supercam, Мерлін-ВР — розвідники, 70–150 км/год, кружляють (часто перед ударом)
+    "recon":     dict(v=(100, 30),  turn=6, ttl=40 * 60, cls="recon",   rng=None, label="Розвідник",        ch="D", lc="D"),
+    "unknown":   dict(v=(200, 80),  turn=4, ttl=25 * 60, cls="drone",   rng=None, label="Ціль",             ch="U", lc="U"),
+    # Х-101/555, Калібр, Іскандер-К, Х-59/69 — дозвукові крилаті, 700–1000 км/год
+    "cruise":    dict(v=(800, 80),  turn=1.5, ttl=12 * 60, cls="missile", rng=None, label="Крилата ракета",   ch="C", lc="C"),
     # мКР/баражуючий боєприпас «Бандероль» (S8000, ГУР): крейсерська 520–560 км/год, макс. ~650; маневрує крутіше за КР
-    "banderol":  dict(v=(530, 60),  turn=3, ttl=15 * 60, cls="missile", rng=None, label="Бандероль (мКР)",  ch="C"),
-    "kab":       dict(v=(450, 100), turn=1,  ttl=6 * 60,  cls="missile", rng=70,   label="КАБ",              ch="K"),
-    "ballistic": dict(v=(3000, 500), turn=1, ttl=10 * 60,  cls="missile", rng=None, label="Балістика",        ch="B"),
+    "banderol":  dict(v=(530, 60),  turn=3, ttl=15 * 60, cls="missile", rng=None, label="Бандероль (мКР)",  ch="N", lc="C"),
+    # Х-22/Х-32 (Ту-22М3), П-800 «Онікс» — надзвукові, ~2500–4000 км/год, хвилини до удару
+    "kh22":      dict(v=(3500, 700), turn=1, ttl=8 * 60,  cls="missile", rng=None, label="Х-22/Онікс",       ch="X", lc="C"),
+    # КАБ/УМПК/УПАБ — планують 40–90 км від носія, 400–700 км/год
+    "kab":       dict(v=(450, 100), turn=1,  ttl=6 * 60,  cls="missile", rng=70,   label="КАБ",              ch="K", lc="K"),
+    # Іскандер-М, KN-23, С-300/С-400 по землі — балістика (подія без траєкторії)
+    "ballistic": dict(v=(3000, 500), turn=1, ttl=10 * 60,  cls="missile", rng=None, label="Балістика",        ch="B", lc="B"),
+    # Х-47М2 «Кинджал» (МіГ-31К), 3М22 «Циркон» — аеробалістика/гіперзвук (подія без траєкторії)
+    "kinzhal":   dict(v=(4500, 1000), turn=1, ttl=8 * 60, cls="missile", rng=None, label="Кинджал/Циркон",   ch="Z", lc="B"),
 }
+EVENT_TYPES = ("ballistic", "kinzhal")    # без траєкторії — апріорна ймовірність за районом/областю
 DRONE_TYPES = {k for k, v in TYPES.items() if v["cls"] == "drone"}
 
 
@@ -158,17 +177,26 @@ FAR_PREFIX_KM = 120   # обласний/міський канал: неточн
 HEAD_RE = r"(курсом на|курс на|в бік|у бік|в сторону|в направлении|у напрямку|в напрямку|напрямок на|летить на|летит на|летять на|летят на|рухається на|движется на|заходить на|заходит на|на)"
 FROM_RE = r"(з боку|зі сторони|со стороны|з напрямку|с направления|від|из|з)"
 POS_RE = r"(над|в районі|в районе|біля|возле|поблизу|около|в|у|повз|мимо)"
-COUNT_RE = re.compile(r"(\d{1,2})\s*(х|x|шт|шахед|мопед|бпла|дрон|ціл|цел|ракет|каб|бандер[оo]л)")
+COUNT_RE = re.compile(r"(\d{1,2})\s*(х|x|шт|шахед|мопед|бпла|дрон|ціл|цел|ракет|каб|бандер[оo]л|гербер|ланцет|розвідник|реактивн)")
 
 TYPE_WORDS = [
-    ("ballistic", ["баліст", "баллист", "балист", "іскандер", "искандер", "кинджал", "кинжал", "кн-23", "kn-23"]),
-    ("kab", ["каб ", "каби", "кабы", "каб.", "авіабомб", "авиабомб", "керован", "управляем"]),
-    ("cruise", ["крилат", "крылат", "калібр", "калибр", "х-101", "х-555", "х-59", "х-69", "ракет"]),
-    ("jet", ["реактивн", "джет", "jet", "герань-3", "герань 3"]),
-    ("recon", ["розвід", "развед", "орлан", "zala", "зала", "суперкам", "supercam"]),
-    ("shahed", ["шахед", "шахід", "мопед", "герань", "гербер", "бпла", "дрон", "shahed", "моторол", "газонокос", "ланцет"]),
+    # порядок = пріоритет: конкретні слова раніше за загальні («розвідувальний БпЛА» → розвідник, а не шахед;
+    # «шахеди і розвідник» → шахед). Підрядки в нижньому регістрі (не фолдинг).
+    ("kinzhal", ["кинджал", "кинжал", "х-47", "циркон", "гіперзвук", "гиперзвук"]),
+    ("ballistic", ["баліст", "баллист", "балист", "іскандер", "искандер", "кн-23", "kn-23", "с-300", "с-400", "c-300", "c-400"]),
+    ("kab", ["каб ", "каби", "кабы", "каб.", "авіабомб", "авиабомб", "керован", "управляем", "умпк", "упаб"]),
+    ("kh22", ["х-22", "х22", "х-32", "онікс", "оникс"]),
+    ("cruise", ["крилат", "крылат", "калібр", "калибр", "х-101", "х-555", "х-55", "х-59", "х-69", "ракет"]),
+    ("jet", ["реактивн", "герань-3", "герань 3", "геран-3"]),
+    ("shahed", ["шахед", "шахід", "мопед", "shahed", "ударн", "герань", "моторол", "газонокос"]),
+    ("gerbera", ["гербер", "імітатор", "имитатор", "пародія", "пародия"]),
+    ("lancet", ["ланцет", "lancet", "фпв", "fpv"]),
+    ("recon", ["розвідувальн", "розвідник", "разведчик", "разведыв", "орлан", "zala", "суперкам", "supercam", "мерлін", "merlin"]),
+    ("shahed", ["бпла", "дрон", "безпілот", "беспилот"]),
     ("unknown", ["ціль", "цель", "цілі", "цели", "обʼєкт", "об'єкт", "объект"]),
 ]
+JET_RE = re.compile(r"(?<![а-яіїєґa-z])(джет|jet)")   # не «бюджет», «гаджет»
+ZALA_RE = re.compile(r"(?<![а-яіїєґ])зала(?![а-яіїєґ])")   # «Зала» (розвідник), не «вокзала»/«зала» у слові
 KILL_WORDS = ["збит", "сбит", "мінус", "минус", "знищ", "уничтож", "приземл"]
 
 
@@ -176,15 +204,22 @@ KILL_WORDS = ["збит", "сбит", "мінус", "минус", "знищ", "�
 BANDEROL_HINT = re.compile(r"бандер[оo]л|бандерод|[sс][\s-]?8000")
 MKR_RE = re.compile(r"(?<![\w-])(мКР|МКР)(?![\w.-])")   # «мКР» (регістр!) — не «мкр.» (мікрорайон)
 CRUISE_HINT = re.compile(r"крилат|крылат|[иі]скандер[\s-]*к\b")
-BALLISTIC_HINT = re.compile(r"баліст|баллист|балист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон")
+BALLISTIC_HINT = re.compile(r"баліст|баллист|балист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон|[сc]-[34]00")
+KH22_HINT = re.compile(r"х-?22\b|х-?32\b|он[іи]кс")
 
 
 def detect_type(t, raw=None):
     if (BANDEROL_HINT.search(t) or (raw and MKR_RE.search(raw))) and not BALLISTIC_HINT.search(t):
         return "banderol"        # повільніша за КР (~530 км/год) — інакше прогноз прольоту на ~20 хв раніше (30.10 10:24 vs 10:48)
+    if KH22_HINT.search(t) and not BALLISTIC_HINT.search(t):
+        return "kh22"            # надзвукова: ~3500 км/год — інакше «крилата» відстає на хвилини
     if CRUISE_HINT.search(t) and not BALLISTIC_HINT.search(t):
         return "cruise"          # «Іскандер-К», «крилаті ракети» — крилата ракета з траєкторією, не балістика
     for typ, kws in TYPE_WORDS:
+        if typ == "shahed" and JET_RE.search(t):
+            return "jet"
+        if typ == "recon" and ZALA_RE.search(t):
+            return "recon"
         if any(k in t for k in kws):
             return typ
     # нечіткий збіг (суржик/помилки: «бублистика», «рокета», «шахид») — той самий словник, що й analyzer
@@ -192,9 +227,12 @@ def detect_type(t, raw=None):
         import analyzer as an
         best, _ = an.threat_of(an.fold(raw if raw is not None else t))
         if best:
-            if best[1].get("sub") == "banderol":
-                return "banderol"
-            return {"ballistic": "ballistic", "missile": "cruise", "kab": "kab", "drone": "shahed",
+            sub = best[1].get("sub")
+            if sub in TYPES:
+                return sub
+            if sub == "s300":
+                return "ballistic"
+            return {"ballistic": "ballistic", "missile": "cruise", "kab": "kab", "drone": "shahed", "recon": "recon",
                     "generic": "unknown"}.get(best[1]["type"])
     except Exception:  # noqa: BLE001
         pass
@@ -307,7 +345,7 @@ OBL_WORDS = [("крим", 0), ("волин", 1), ("вінниччин", 2), ("в
              ("херсонщин", 22), ("хмельниччин", 23), ("хмельнитчин", 23), ("черкащин", 24), ("буковин", 25),
              ("чернігівщин", 26), ("черниговщин", 26)]
 OBL_HDR_RE = re.compile(r"(?=(?:[А-ЯІЇЄҐ][а-яіїєґ'’]+(?:щина|щини|ччина|ччини|ття|жжя|ччя))\s*[:—–-])")
-CLAUSE_RE = re.compile(r"(?=(?<![\w-])(?:\d{1,2}\s*[хx]\s*)?(?:(?:реактивн|швидкісн|ударн)\w*\s+)?(?:бпла|шахед|дрон|ракет|каб\b|мопед|бандер[оo]л)\w*)", re.I)
+CLAUSE_RE = re.compile(r"(?=(?<![\w-])(?:\d{1,2}\s*[хx]\s*)?(?:(?:реактивн|швидкісн|ударн)\w*\s+)?(?:бпла|шахед|дрон|ракет|каб\b|мопед|бандер[оo]л|гербер|ланцет|розвідник|розвідувальн)\w*)", re.I)
 HEAD_CNT_RE = re.compile(r"(курсом|курс на|в напрямку|у напрямку|в бік|у бік|в сторону|в направлении)", re.I)
 
 
@@ -667,7 +705,7 @@ class Tracker:
             return touched
         if typ is None:
             return touched
-        if typ == "ballistic":
+        if typ in EVENT_TYPES:
             reg = (cues["pos"] or cues["heading"] or [None])[0]
             # «балістика хз звідки» — без місця: подія для всієї області каналу
             ob = reg["oblast"] if reg else (self.home or {}).get("oblast", -1)
@@ -778,7 +816,7 @@ class Tracker:
             t = {"drone": "shahed", "rocket": "cruise", "kab": "kab", "ballistic": "ballistic", "recon_drone": "recon"}.get(typ)
             if not t:
                 continue
-            if t in ("ballistic",):
+            if t in EVENT_TYPES:
                 self.events.append((ts, t, region, -1, dict(name="", lat=lat, lon=lon, region=region, oblast=-1)))
                 continue
             cand = [tr for tr in self.tracks if self._compatible(tr, t)]
@@ -818,7 +856,7 @@ class Tracker:
                 name, pt = self.history.likely_target(lat, lon, math.degrees(hd) if Rh >= 0.3 else None, ulat, ulon)
                 if name:
                     lt = dict(name=name, p=round(pt, 3))
-            out.append(dict(id=tr.id, type=tr.type, label=tr.cfg["label"], ch=tr.cfg["ch"], cls=tr.cfg["cls"], likely=lt,
+            out.append(dict(id=tr.id, type=tr.type, label=tr.cfg["label"], ch=tr.cfg["ch"], lc=tr.cfg["lc"], cls=tr.cfg["cls"], likely=lt,
                             count=tr.count, lat=round(lat, 4), lon=round(lon, 4), heading=round(math.degrees(hd)),
                             heading_conf=round(Rh, 2), speed=round(v), sd_km=round(sd, 1),
                             age_s=int(now - tr.last_obs), obs=tr.nobs, src=sorted(tr.src),
@@ -834,7 +872,7 @@ class Tracker:
             else:
                 p = 0.05
             age = (now - t0) / 60
-            out.append(dict(id=-int(t0) % 100000, type=typ, label=TYPES[typ]["label"], ch=TYPES[typ]["ch"], cls="missile",
+            out.append(dict(id=-int(t0) % 100000, type=typ, label=TYPES[typ]["label"], ch=TYPES[typ]["ch"], lc=TYPES[typ]["lc"], cls="missile",
                             count=1, lat=place["lat"] if place else None, lon=place["lon"] if place else None,
                             heading=None, heading_conf=0, speed=TYPES[typ]["v"][0], sd_km=None, age_s=int(now - t0),
                             obs=1, src=["event"], likely=None, p={5: p, 15: p, 30: p}, eta_min=max(0.0, round(3 - age, 1)), path=[], dist_km=None, trail=[]))
@@ -856,7 +894,7 @@ def scope_probs(trk, zones, now=None, maxkm=260.0):
         return {}
     c0 = zones.get("city") or zones[names[0]]
     for tr in trk.tracks:
-        if now - tr.last_obs >= tr.cfg["ttl"]:
+        if now - tr.last_obs >= tr.cfg["ttl"] or tr.cfg["cls"] == "recon":   # розвідник не підвищує зону/рівень
             continue
         tr.predict_to(max(tr.t, now))
         x, y, *_ = tr.mean()
@@ -884,7 +922,7 @@ def threat_summary(targets, cal=None):
     def comb(cls, T):
         q = 1.0
         for d in targets:
-            if cls is None or d["cls"] == cls:
+            if (d["cls"] != "recon") if cls is None else d["cls"] == cls:
                 p = min(0.99, d["p"][T])
                 q *= (1 - p) ** math.sqrt(max(1, min(d["count"], 9)))
         return round(1 - q, 3)
@@ -894,7 +932,7 @@ def threat_summary(targets, cal=None):
     s = {k: dict(v) for k, v in raw.items()}
     for k, cls in (("p_any", None), ("p_drone", "drone"), ("p_missile", "missile")):
         c = cal.get(k[2:])
-        if not c or not any(cls is None or d["cls"] == cls for d in targets):
+        if not c or not any((d["cls"] != "recon") if cls is None else d["cls"] == cls for d in targets):
             continue
         prev = 1.0
         for T in (30, 15, 5):                       # монотонно: p5 ≤ p15 ≤ p30

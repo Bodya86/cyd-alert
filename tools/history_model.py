@@ -36,7 +36,7 @@ OBL_WORDS = [("крим", 0), ("волин", 1), ("вінниччин", 2), ("в
              ("чернігівщин", 26), ("черниговщин", 26)]
 HIT_WORDS = ("вибух", "взрыв", "прильот", "прилет", "влучан", "попадан", "уражен", "пожеж", "пожар", "детонац")
 TYPE_EXTRA = [("jet", ("швидкісн", "скоростн")), ("shahed", ("🅿", "🛵", "мопед"))]
-DRONES = ("shahed", "jet", "unknown", None)
+DRONES = ("shahed", "gerbera", "jet", "lancet", "unknown", None)
 TRK_W = 0.3     # вага переходів із ланцюжків положень (асоціація «та сама ціль» ненадійна) проти явних «курсом на»
 try:            # щотижнева перекалібровка (tools/recalibrate.py) може змінити вагу
     TRK_W = float(json.load(open(os.path.join(ROOT, "data", "model_params.json"), encoding="utf-8")).get("trk_w", TRK_W))
@@ -220,7 +220,7 @@ def extract(posts, geo):
             if hit and (pos or head):
                 g = (pos or head)[0]
                 ev.append(dict(ts=p["ts"], ch=p["ch"], typ=typ, kind="hit", lat=g["lat"], lon=g["lon"], name=g["name"], ob=g["ob"]))
-            if typ not in DRONES and typ not in ("cruise", "banderol", "kab", "recon"):
+            if typ not in DRONES and typ not in ("cruise", "banderol", "kh22", "kab", "recon"):
                 continue
             src = pos[-1] if pos else None
             for g in pos:

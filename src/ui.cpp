@@ -776,22 +776,22 @@ static uint8_t s_ntgt = 0;
 
 // Ціль розрізняється лише кольором і силуетом (без підписів). Кольори обрано так, щоб не зливалися
 // із заливкою областей (зелена/жовта/помаранчева/червона): дрони — фіолетовий «шахед» з білою+темною обвідкою,
-// крилаті ракети / КАБ — червоний ромб з білою обвідкою, балістика — блакитний ромб з темною обвідкою,
+// ракети — червона гама (ромб, біла обвідка), КАБ — світло-сірий, балістика/Кинджал — блакитні (темна обвідка),
 // інше / невідомо — помаранчевий з білою обвідкою. Курс — білий пунктир з темною підкладкою;
 // пройдений шлях — дрібний пунктир кольором цілі з темною підкладкою.
-#define TC_DRONE   0xB44CFF
-#define TC_MISSILE 0xFF2B2B
-#define TC_BALL    0x2EE6FF
 #define TC_OTHER   0xFF8C1A
 #define TC_COURSE  0xFFFFFF
+// колір за типом (як TYPE_COLORS у server/tg_notify.py): дрони — фіолетова гама, ракети — червона,
+// КАБ — світло-сірий, балістика — блакитна, невідомо — помаранчевий
+static const char TC_CH[] = "SGJLDCNXKBZ";
+static const uint32_t TC_RGB[] = {0xB44CFF, 0xD6A8FF, 0xFF40D6, 0x6E28FF, 0x8C96FF,
+                                  0xFF2B2B, 0xFF4080, 0xC80028, 0xE0E0E0, 0x2EE6FF, 0x2878FF};
 static uint32_t targetColor(char ch) {
-  switch (ch) {
-    case 'S': case 'J': case 'D': return TC_DRONE;
-    case 'C': case 'K':           return TC_MISSILE;
-    case 'B':                     return TC_BALL;
-    default:                      return TC_OTHER;
-  }
+  const char* p = ch ? strchr(TC_CH, ch) : nullptr;
+  return p ? TC_RGB[p - TC_CH] : TC_OTHER;
 }
+static inline bool tgtMissile(char ch) { return ch && strchr("CNXKBZ", ch); }
+static inline bool tgtDrone(char ch) { return ch && strchr("SGJLD", ch); }
 
 // пунктир: phase переноситься між відрізками, щоб штрихи йшли рівно по ламаній
 static void dashLine(lv_draw_ctx_t* dc, const lv_draw_line_dsc_t* ln, lv_point_t a, lv_point_t b, float& phase,
@@ -907,11 +907,11 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
     if (!_lv_area_intersect(&tmp, &bb, clip)) continue;
     const MapTarget& t = s_tgt[k];
     lv_color_t tc = col(targetColor(t.ch));
-    bool missile = t.ch == 'C' || t.ch == 'K' || t.ch == 'B';
-    bool drone = !missile && t.hd >= 0 && (t.ch == 'S' || t.ch == 'J' || t.ch == 'D');
+    bool missile = tgtMissile(t.ch);
+    bool drone = !missile && t.hd >= 0 && tgtDrone(t.ch);
     float hr = (t.hd >= 0 ? t.hd : 0) * 0.0174533f, sx = sinf(hr), sy = -cosf(hr);
     // ballistic: темний контур, без білого (заливка й так світла); решта — темний + білий
-    const lv_color_t layers[3] = {lv_color_black(), t.ch == 'B' ? lv_color_black() : lv_color_white(), tc};
+    const lv_color_t layers[3] = {lv_color_black(), (t.ch == 'B' || t.ch == 'Z' || t.ch == 'K') ? lv_color_black() : lv_color_white(), tc};
     const float grow[3] = {2.2f, 1.1f, 0.0f};
     for (int pass = 0; pass < 3; pass++) {
       float s = S + grow[pass];

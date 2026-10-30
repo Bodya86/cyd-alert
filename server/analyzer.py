@@ -63,6 +63,7 @@ for _k in ("approach", "escalate", "clear", "ignore", "unknown_dir"):
 for _t in RULES["threats"]:
     _t["kw"] = [fold_kw(w) for w in _t["kw"]]
     _t["fuzzy"] = [("=" + fold_kw(w[1:])) if w.startswith("=") else fold_kw(w) for w in _t.get("fuzzy", [])]
+    _t["mask"] = [fold_kw(w) for w in _t.get("mask", [])]
 for _lst in RULES.get("settlements", {}).values():
     for _s in _lst:
         _s["kw"] = [fold_kw(w) for w in _s["kw"]]
@@ -139,11 +140,30 @@ def find_places(t):
     return out
 
 
+def _th_hit(t, th):
+    return bool(_any(t, th["kw"]) or fuzzy_any(t, th.get("fuzzy", [])))
+
+
+def threat_text(t):
+    """Текст для визначення типу: підтипи з mask прибирають загальні слова («розвідувальний БпЛА» → без «бпла»,
+    «Іскандер-К» → без «іскандер»), щоб загальний запис не перебивав конкретний. → (текст, id записів з mask, що
+    збіглися — вони самі оцінюються по повному тексту). Те саме робить src/analyzer.cpp."""
+    hit = set()
+    m_t = t
+    for th in RULES["threats"]:
+        if th.get("mask") and _th_hit(t, th):
+            hit.add(id(th))
+            for m in th["mask"]:
+                m_t = m_t.replace(m, " " * len(m))
+    return m_t, hit
+
+
 def threat_of(t):
     """→ (threat dict | None, вага) — тип за підрядком або нечітким збігом слова."""
     best, w = None, 0
+    mt, mhit = threat_text(t)
     for th in RULES["threats"]:
-        if not (_any(t, th["kw"]) or fuzzy_any(t, th.get("fuzzy", []))):
+        if not (id(th) in mhit if th.get("mask") else _th_hit(mt, th)):
             continue
         w = max(w, th["weight"])
         lv = 2 if th.get("level") == "red" else 1
@@ -388,6 +408,8 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
             ev.prox = 1
         ballistic_obl = ev.threat == "ballistic" and obl_hit      # «балістика на Полтавщину» — хвилини до удару
         ev.level = level_of(ev.cls, ev.prox, ev.oblast_wide or ballistic_obl, bool(settl_bonus))
+        if best and best[1].get("cap") == "yellow":     # розвідник: відстежуємо, але сам не дає помаранчевий/червоний
+            ev.level = min(ev.level, YELLOW)
         ev.explicit = bool(in_city or dist_bonus or settl_bonus >= 2 or ev.oblast_wide or ballistic_obl)
     return ev
 

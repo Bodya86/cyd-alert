@@ -56,12 +56,14 @@ def main():
     for t in rules["threats"]:
         k, c = kwlist(t["kw"])
         fk, fc = kwlist(t.get("fuzzy", [])) if t.get("fuzzy") else ("nullptr", 0)
-        tnames.append((t, k, c, fk, fc))
+        mk, mc = kwlist(t["mask"]) if t.get("mask") else ("nullptr", 0)
+        tnames.append((t, k, c, fk, fc, mk, mc))
     w(f"#define THREAT_COUNT {len(tnames)}")
     w("static const ThreatDef THREATS[THREAT_COUNT] = {")
-    for t, k, c, fk, fc in tnames:
+    for t, k, c, fk, fc, mk, mc in tnames:
         lvl = 2 if t.get("level") == "red" else 1
-        w(f"  {{{cstr(t['type'])}, {cstr(t['label'])}, {cstr(t.get('kind', t['label']))}, {t['weight']}, {lvl}, {k}, {c}, {fk}, {fc}}},")
+        cap = {"yellow": 1, "orange": 2}.get(t.get("cap"), 0)   # Level: 1 жовтий, 2 помаранчевий
+        w(f"  {{{cstr(t['type'])}, {cstr(t['label'])}, {cstr(t.get('kind', t['label']))}, {t['weight']}, {lvl}, {k}, {c}, {fk}, {fc}, {mk}, {mc}, {cap}}},")
     w("};")
     pl = []
     for p_ in rules.get("places", []):

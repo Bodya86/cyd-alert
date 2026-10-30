@@ -237,7 +237,7 @@ static void parseTargets(JsonDocument& doc) {
   for (JsonObject t : doc["tgt"].as<JsonArray>()) {
     if (g_state.ntgt >= MAX_TARGETS) break;
     MapTarget& m = g_state.tgt[g_state.ntgt++];
-    const char* ch = t["c"] | "U";
+    const char* ch = t["k"] | (t["c"] | "U");     // "k" — точний тип (≥1.3.12), "c" — старий клас
     m.ch = ch[0];
     m.lat = t["la"] | 0.0f; m.lon = t["lo"] | 0.0f;
     m.hd = t["hd"] | -1;
