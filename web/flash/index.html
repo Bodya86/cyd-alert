@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CYD Alert — прошити пристрій</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+  :root { --bg:#10151c; --panel:#1a222d; --text:#f2f5f8; --muted:#a9b4c2; --acc:#3b8bea; --red:#e5484d; --yel:#d4a72c; --grn:#2fa86b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:20px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 18px 60px; }
+  h1 { font-size: 34px; margin: 8px 0 4px; }
+  h2 { font-size: 26px; margin: 36px 0 10px; }
+  p, li { margin: 8px 0; }
+  a { color: #7db7ff; }
+  .muted { color: var(--muted); font-size: 18px; }
+  .card { background: var(--panel); border-radius: 14px; padding: 18px 20px; margin: 14px 0; }
+  .warn { border-left: 6px solid var(--yel); }
+  .disc { border-left: 6px solid var(--red); font-weight: 600; }
+  ol { padding-left: 1.4em; }
+  ol > li { margin: 14px 0; }
+  b.key { background:#26303d; padding: 1px 8px; border-radius: 6px; white-space: nowrap; }
+  .btn { display:block; width:100%; font-size: 26px; font-weight: 700; padding: 22px 16px; border: 0; border-radius: 14px;
+         background: var(--acc); color: #fff; cursor: pointer; }
+  .btn:hover { filter: brightness(1.1); }
+  .btn.alt { background:#33404f; font-size: 21px; padding: 16px; }
+  .center { text-align:center; }
+  esp-web-install-button { display:block; margin: 10px 0; }
+  .no { background:#3a1d20; border-radius: 12px; padding: 14px 16px; }
+  details { margin: 10px 0; } summary { cursor:pointer; font-weight:600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🛡 CYD Alert</h1>
+  <p class="muted">Мапа повітряних тривог на маленькому екрані. Тут можна встановити програму на пристрій — потрібен лише комп'ютер і кабель.</p>
+
+  <div class="card disc">Інформаційний пристрій, не замінює офіційні сигнали тривоги.</div>
+
+  <h2>1. Що купити</h2>
+  <div class="card">
+    <p>Плата з екраном 2.8" <b>ESP32-2432S028</b> («CYD», жовта плата):<br>
+      <a href="https://prom.ua/ua/p2563645230-plata-razrabotchika-esp32.html" target="_blank" rel="noopener">купити на Prom.ua →</a></p>
+    <p><b>Кабель USB має передавати дані</b>, а не лише заряджати. Кабель з комплекту часто підходить лише для живлення.
+      Якщо комп'ютер «не бачить» плату — спершу спробуйте інший кабель (наприклад, від телефона, яким ви переносили фото).</p>
+    <p class="muted">Потрібен комп'ютер з Windows, macOS або Linux і браузер <b>Google Chrome</b> або <b>Microsoft Edge</b>.
+      З телефона, iPhone, Safari чи Firefox прошити не вийде.</p>
+  </div>
+
+  <h2>2. Лише для Windows: драйвер</h2>
+  <div class="card">
+    <p>На більшості таких плат стоїть чип <b>CH340</b>. Якщо Windows його не знає, встановіть офіційний драйвер виробника (WCH):
+      <a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener">завантажити CH341SER.EXE →</a></p>
+    <p class="muted">Відкрийте файл, натисніть <b class="key">INSTALL</b>, дочекайтесь «успішно», потім перепідключіть плату.
+      На macOS і Linux драйвер зазвичай не потрібен.</p>
+  </div>
+
+  <h2>3. Прошити</h2>
+  <ol>
+    <li>Підключіть плату кабелем до комп'ютера. Екран може засвітитися — це нормально.</li>
+    <li>Натисніть велику синю кнопку нижче.</li>
+    <li>У віконці браузера оберіть пристрій (назва схожа на <b class="key">USB-SERIAL CH340</b> або <b class="key">CP2102</b>, часто з «COM3», «COM5»…)
+      і натисніть <b class="key">Підключити</b>.</li>
+    <li>Далі натисніть <b class="key">INSTALL CYD ALERT</b>, потім <b class="key">INSTALL</b>. Усі старі дані на платі буде стерто — так і має бути.</li>
+    <li>Чекайте 1–3 хвилини, поки смужка дійде до 100%. <b>Не відключайте кабель.</b> Коли з'явиться <b class="key">Installation complete!</b> — натисніть <b class="key">NEXT</b> / закрийте віконце.</li>
+  </ol>
+
+  <esp-web-install-button manifest="manifest-cyd.json">
+    <button slot="activate" class="btn">🔌 Прошити пристрій</button>
+    <div slot="unsupported" class="no">Цей браузер не вміє прошивати. Відкрийте цю сторінку в <b>Google Chrome</b> або <b>Microsoft Edge</b> на комп'ютері.</div>
+    <div slot="not-allowed" class="no">Сторінку треба відкрити через захищене з'єднання (https://).</div>
+  </esp-web-install-button>
+  <p class="center muted" id="ver">Версія програми: …</p>
+
+  <details class="card">
+    <summary>Екран після прошивки білий або кольори «як негатив»?</summary>
+    <p>Є версія плати з іншим екраном (зазвичай з двома роз'ємами USB-C і micro-USB). Прошийте її цією кнопкою — так само, як вище:</p>
+    <esp-web-install-button manifest="manifest-cyd2usb.json">
+      <button slot="activate" class="btn alt">Прошити (варіант з двома USB)</button>
+      <div slot="unsupported" class="no">Потрібен Google Chrome або Microsoft Edge на комп'ютері.</div>
+      <div slot="not-allowed" class="no">Потрібне https://-з'єднання.</div>
+    </esp-web-install-button>
+  </details>
+
+  <h2>4. Як підключити (на самому пристрої)</h2>
+  <div class="card">
+    <p>Після прошивки плату можна живити від будь-якого USB-зарядника телефона. Далі все на екрані — пальцем або стилусом
+      (екран не «телефонний», натискайте трохи сильніше):</p>
+    <ol>
+      <li><b>Оберіть Wi-Fi мережу</b> зі списку. Видно лише мережі <b>2.4 ГГц</b> (5 ГГц плата не бачить). Немає вашої — внизу списку є «Ввести назву мережі вручну».</li>
+      <li><b>Введіть пароль Wi-Fi</b> на екранній клавіатурі й натисніть галочку <b class="key">✓</b>. Плата підключається до 20 секунд.
+        Якщо пароль хибний — з'явиться «Не вдалося підключитися. Перевірте пароль.» і знову список мереж.</li>
+      <li><b>Крок 1/3 — область.</b> Торкніться своєї області.</li>
+      <li><b>Крок 2/3 — місто</b> (або «Уся область (без міста)»).</li>
+      <li><b>Крок 3/3 — район</b> свого міста, «Усе місто», або «Знайти за адресою (вулиця)», якщо не знаєте район.</li>
+      <li>Готово: з'явиться мапа і стан тривоги. Налаштування (⚙) завжди можна змінити пізніше.</li>
+    </ol>
+    <p class="muted">Нові версії програми плата отримує сама через інтернет — нічого перепрошивати не треба.</p>
+  </div>
+
+  <h2>Якщо не виходить</h2>
+  <div class="card warn">
+    <details open><summary>У віконці немає жодного пристрою</summary>
+      <p>Інший кабель (з передачею даних) → інший USB-порт комп'ютера → на Windows встановіть драйвер CH340 (крок 2) і перепідключіть плату.</p></details>
+    <details><summary>«Failed to connect» / зависає на «Connecting»</summary>
+      <p>На платі є дві маленькі кнопки: <b class="key">BOOT</b> і <b class="key">RST</b> (або EN). Затисніть і тримайте <b class="key">BOOT</b>,
+        натисніть синю кнопку на цій сторінці й оберіть порт, а коли почнеться прошивка (з'являться відсотки) — відпустіть <b class="key">BOOT</b>.
+        Якщо не допомогло: тримаючи <b class="key">BOOT</b>, коротко натисніть <b class="key">RST</b>, відпустіть <b class="key">BOOT</b> і спробуйте ще раз.</p></details>
+    <details><summary>«Port is busy» / порт зайнятий</summary>
+      <p>Закрийте інші програми, що працюють з платою (Arduino, PlatformIO, інші вкладки з цією сторінкою), і спробуйте знову.</p></details>
+    <details><summary>Прошивка перервалась</summary>
+      <p>Нічого страшного — плату не зіпсовано. Просто повторіть прошивку з початку.</p></details>
+    <details><summary>Після прошивки екран чорний</summary>
+      <p>Натисніть <b class="key">RST</b> на платі або вийміть і знову вставте кабель. Білий екран чи дивні кольори — див. «варіант з двома USB» вище.</p></details>
+  </div>
+
+  <p class="muted center" style="margin-top:40px">CYD Alert · інформаційний пристрій, не замінює офіційні сигнали тривоги.<br>
+    Під час тривоги завжди дійте за офіційними сигналами та в укриття.</p>
+</main>
+<script>
+  fetch("status.json", {cache: "no-store"}).then(r => r.json()).then(s => {
+    document.getElementById("ver").textContent = s.version ? "Версія програми: " + s.version + " (стабільна)" : "Програма готується, спробуйте за кілька хвилин";
+  }).catch(() => {});
+</script>
+</body>
+</html>

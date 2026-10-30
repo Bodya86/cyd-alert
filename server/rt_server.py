@@ -27,6 +27,7 @@ import jaam_ws                # noqa: E402
 import tg_notify              # noqa: E402
 import tg_mtproto             # noqa: E402
 import accuracy               # noqa: E402
+import flasher                # noqa: E402
 import outcomes               # noqa: E402
 from live import NewsLoop     # noqa: E402
 import fastforecast           # noqa: E402
@@ -412,7 +413,7 @@ def make_app(out):
              "tg_fast_age_s": round(now - STATS["tg_fast_at"], 1), "tg_all_age_s": round(now - STATS["tg_all_at"], 1),
              "full_ms": STATS.get("full_ms"), "hot_ms": STATS.get("hot_ms"), "hot_why": STATS.get("hot_why"), "outage_age_s": round(now - STATS["outage_at"], 1), "ws_clients": STATS["ws_clients"],
              "pushes": STATS["push"], "last_change_age_s": round(now - STATS["last_change"], 1) if STATS["last_change"] else None,
-             "notify": bool(STATS.get("notify")), "errors": STATS["errors"],
+             "notify": bool(STATS.get("notify")), "flash_ver": flasher.STATUS["version"], "flash_err": flasher.STATUS["err"], "errors": STATS["errors"],
              "channels_err": sorted(k for k, v in srv.channels.items() if v.get("err")),
              "tg_ok_age_s": round(now - STATS["tg_ok_at"], 1) if STATS["tg_ok_at"] else None,
              "tg_ok_n": STATS["tg_ok_n"], "last_post_age_s": _last_post_age(now),
@@ -486,6 +487,9 @@ def make_app(out):
             p = os.path.join(p, "index.html")
         return file_resp(p)
 
+    flash_root = os.environ.get("FLASH_DIR", os.path.join(os.path.dirname(out), "flash"))
+    flasher.routes(app, flash_root, web)       # веб-прошивальник /flash/ (до загального static_any)
+    app["flash_root"] = flash_root
     app.router.add_get("/api/health", health)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/{name:.+}", api)
@@ -510,6 +514,7 @@ def main():
         def on_change(paths):
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(app_["broadcast"](paths)))
         Engine(a.out, on_change).start()
+        flasher.start(app_["flash_root"], log)
     app.on_startup.append(start)
     web.run_app(app, host=a.host, port=a.port, access_log=None, print=lambda *x: log(*x))
 

@@ -316,3 +316,14 @@ test/host/run_tests.sh /path/to/saved_t.me_s_page.html   # C++‑версия + 
 ## 8. Лицензии
 
 Границы районов — OCHA / [HDX COD‑AB Ukraine](https://data.humdata.org/dataset/cod-ab-ukr) (CC BY 3.0 IGO), упрощены. UID районов — из `alerts_in_ua` (PyPI) (MIT). Соответствие регионов ukrainealarm/JAAM (`tools/src/uaapi.json`, `tools/src/jaam_regions.json`) — из репозитория J‑A‑A‑M/ukraine_alarm_map (GPL‑3.0; используются только идентификаторы и координаты как факты). Данные тревог — **JAAM (jaam.net.ua)**, атрибуция обязательна (показывается в дашборде и API). Данные графиков — от облэнерго/YASNO через указанные зеркала, только для личного использования. Реки/водоёмы — Natural Earth (public domain). Населённые пункты — GeoNames (CC BY 4.0). Исторические посты — публичные веб‑превью Telegram‑каналов, в репозиторий попадает только агрегированная модель. Шрифт Golos Text — SIL OFL 1.1. LVGL, TFT_eSPI, XPT2046_Touchscreen, ArduinoJson — по их лицензиям.
+
+## Веб-прошивальник (`/flash/`)
+
+`https://178.105.247.133.sslip.io/flash/` — сторінка українською для покупців (Chrome/Edge, Web Serial, [ESP Web Tools](https://esphome.github.io/esp-web-tools/)).
+Сторінка — `web/flash/index.html`, логіка — `server/flasher.py` (запускається з `rt_server.py`):
+* раз на 15 хв сервер дивиться `releases/latest` (стабільний канал після `fw-promote.yml`), завантажує `cyd-full-cyd.bin` і
+  `cyd-full-cyd2usb.bin` (злитий образ з 0x0: bootloader 0x1000, розмітка 0x8000, boot_app0/otadata 0xE000, app0 0x10000),
+  перевіряє розмір і заголовки й атомарно перемикає `/var/lib/cyd-alert/flash/manifest-<env>.json`. Бета на сторінку не потрапляє.
+* локальна копія потрібна, бо асети релізів GitHub без CORS (браузер не може їх `fetch()`).
+* маніфест: `new_install_prompt_erase: false` → нове встановлення **завжди стирає всю флеш** (NVS, otadata), Improv вимкнено.
+* стан: `/flash/status.json`, поля `flash_ver`/`flash_err` у `/api/health`.
