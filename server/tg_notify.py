@@ -17,8 +17,9 @@ time.tzset()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CFG_PATH = os.path.join(ROOT, "data", "notify.json")
 LV = {"green": 0, "yellow": 1, "orange": 2, "red": 3}
-TYPE_COLORS = {"S": (242, 201, 76), "J": (255, 140, 26), "D": (180, 190, 200), "U": (242, 201, 76),
-               "C": (229, 72, 77), "K": (229, 72, 77), "B": (229, 72, 77)}
+# як на пристрої (src/ui.cpp targetColor): дрони — фіолетові, ракети/КАБ — червоні, балістика — блакитна, інше — помаранчеве
+TYPE_COLORS = {"S": (180, 76, 255), "J": (180, 76, 255), "D": (180, 76, 255), "U": (255, 140, 26),
+               "C": (255, 43, 43), "K": (255, 43, 43), "B": (46, 230, 255)}
 
 
 def _log(*a):
@@ -114,7 +115,7 @@ def _threat(st):
 
 
 def alert_text(st, level, cfg, update=False):
-    """Коротко, 5 рядків: місце · тип · летить/не летить · ймовірність прольоту · ймовірна ціль.
+    """Коротко, 5 рядків: місце · тип · летить/не летить · ймовірність прольоту (не при червоній) · ймовірна ціль.
     Без цитат постів, назв каналів, джерел і підпису з часом. update — уточнення («загроза ближче»)."""
     place = cfg.get("label") or cfg.get("city")
     lines = [f"{HEAD_ICON.get(level, '⚠️')} {place}" + (" · ближче" if update else ""), _threat(st)]
@@ -122,7 +123,7 @@ def alert_text(st, level, cfg, update=False):
     if sc in SCOPE_LINE:
         lines.append(SCOPE_LINE[sc])
     pn = st.get("p_near")
-    if pn is not None:
+    if pn is not None and level < 3:   # червона тривога: без «Проліт поруч N%» — лише в укриття
         eta = st.get("eta", -1)
         lines.append(f"Проліт поруч за 30 хв: {pn}%" + (f" (~{eta} хв)" if pn and eta is not None and eta >= 0 else ""))
     if st.get("lt") and st.get("lp"):
@@ -212,18 +213,35 @@ def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
             dr.ellipse([x - 3 * S, y - 3 * S, x + 3 * S, y + 3 * S], fill=(200, 210, 220))
             dr.text((x + 6 * S, y - 9 * S), c["name"], font=f12, fill=(220, 228, 236))
 
-    # цілі: курс штрихом через точки прогнозу (5/15/30 хв), іконка, кількість
-    for t in st.get("tgt") or []:
-        col = TYPE_COLORS.get(t.get("c"), (242, 201, 76))
-        x, y = xy(t["la"], t["lo"])
-        pts = [(x, y)] + [xy(p[0], p[1]) for p in (t.get("pt") or [])]
+    def dashed(pts, col, width, on, per):
+        """пунктир по ламаній (фаза переноситься між відрізками)"""
+        ph = 0.0
         for a, b in zip(pts, pts[1:]):
             L = math.hypot(b[0] - a[0], b[1] - a[1])
-            n = max(1, int(L / (10 * S)))
-            for k in range(0, n, 2):
-                p1 = (a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)
-                p2 = (a[0] + (b[0] - a[0]) * min(n, k + 1) / n, a[1] + (b[1] - a[1]) * min(n, k + 1) / n)
-                dr.line([p1, p2], fill=col, width=2 * S)
+            if L < 0.5:
+                continue
+            ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+            s0 = 0.0
+            while s0 < L:
+                m = (ph + s0) % per
+                seg = min((on - m) if m < on else (per - m), L - s0)
+                if m < on:
+                    dr.line([(a[0] + ux * s0, a[1] + uy * s0), (a[0] + ux * (s0 + seg), a[1] + uy * (s0 + seg))], fill=col, width=width)
+                s0 += max(seg, 0.5)
+            ph = (ph + L) % per
+
+    # цілі: пройдений шлях — дрібний пунктир кольором цілі; курс прогнозу (5/15/30 хв) — білий пунктир; обидва на темній підкладці
+    for t in st.get("tgt") or []:
+        col = TYPE_COLORS.get(t.get("c"), (255, 140, 26))
+        x, y = xy(t["la"], t["lo"])
+        tr = [xy(p[0], p[1]) for p in (t.get("tr") or [])] + [(x, y)]
+        if len(tr) > 1:
+            dashed(tr, (11, 15, 20), 5 * S, 5 * S, 11 * S)
+            dashed(tr, col, 3 * S, 5 * S, 11 * S)
+        pts = [(x, y)] + [xy(p[0], p[1]) for p in (t.get("pt") or [])]
+        if len(pts) > 1:
+            dashed(pts, (11, 15, 20), 5 * S, 10 * S, 17 * S)
+            dashed(pts, (255, 255, 255), 2 * S, 10 * S, 17 * S)
         r = 8 * S
         dr.ellipse([x - r, y - r, x + r, y + r], fill=col, outline=(11, 15, 20), width=2 * S)
         hd = t.get("hd", -1)

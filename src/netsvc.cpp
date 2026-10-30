@@ -250,6 +250,11 @@ static void parseTargets(JsonDocument& doc) {
       m.pla[m.npt] = pt[0]; m.plo[m.npt] = pt[1]; m.psd[m.npt] = constrain((int)pt[2], 0, 99);
       m.npt++;
     }
+    m.ntr = 0;
+    for (JsonArray q : t["tr"].as<JsonArray>()) {
+      if (m.ntr >= MAX_TRAIL || q.size() < 2) break;
+      m.tla[m.ntr] = q[0]; m.tlo[m.ntr] = q[1]; m.ntr++;
+    }
   }
   strlcpy(g_state.ltName, doc["lt"] | "", sizeof(g_state.ltName));
   g_state.ltP = constrain((int)(doc["lp"] | 0), 0, 100);

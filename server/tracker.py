@@ -63,6 +63,14 @@ CITY_CAL = load_city_cal()
 SPLIT_DIGESTS = True     # дайджести з кількома цілями → окремі фрагменти (split_post)
 HEAD_ASSOC_KM = 150.0    # «курсом на X» без положення оновлює лише ціль, від якої X ≤ 150 км (0 — стара поведінка)
 HEAD_NEW_SIGMA = 30.0    # нова ціль біля X для «Область: … курсом на X» (0 — стара поведінка: зона каналу)
+TRAIL_MAX = 8            # точок пройденого шляху цілі
+TRAIL_SIGMA = 30.0       # початкове положення з σ ≤ 30 км — перша точка шляху (зона каналу 35 км — ні)
+FC_TURN = 0.0            # дифузія курсу в прогнозі (× cfg turn, °/√хв): цілі виляють; 0 — прямі. model_params "fc_turn"
+try:
+    with open(os.path.join(DATA, "model_params.json"), encoding="utf-8") as _f:
+        FC_TURN = float(json.load(_f).get("fc_turn", FC_TURN))
+except (OSError, ValueError, TypeError):
+    pass
 
 
 # ---------------- геометрія ----------------
@@ -337,6 +345,8 @@ class Track:
         self.src = {src} if src else set()
         self.rnd = rnd
         self.nobs = 1
+        # пройдений шлях (пунктир на мапі): оцінки положення після спостережень, ≤ TRAIL_MAX точок
+        self.trail = [[int(t), round(lat, 4), round(lon, 4)]] if sigma <= TRAIL_SIGMA else []
         vm, vs = self.cfg["v"]
         self.p = []
         # курс невідомий: prior_mix (типово 60%, data/model_params.json) частинок — з історичного поля маршрутів (якщо модель є й комірка має дані), решта рівномірно
@@ -403,6 +413,18 @@ class Track:
         s2 = 2 * sigma * sigma
         return [math.exp(-((q[0] - px) ** 2 + (q[1] - py) ** 2) / s2) for q in self.p]
 
+    def add_trail(self, ts):
+        """Додати поточну оцінку положення (середнє частинок) до пройденого шляху; поруч (< 3 км) — оновити останню."""
+        x, y, *_ = self.mean()
+        lat, lon = self.proj.ll(x, y)
+        tl = self.trail = getattr(self, "trail", None) or []
+        pt = [int(ts), round(lat, 4), round(lon, 4)]
+        if tl and math.hypot(*Proj(tl[-1][1], tl[-1][2]).xy(lat, lon)) < 3.0:
+            tl[-1] = pt
+        else:
+            tl.append(pt)
+        del tl[:-TRAIL_MAX]
+
     def obs_pos(self, lat, lon, sigma):
         return self._reweight([0.02 + l for l in self.lik_pos(lat, lon, sigma)])
 
@@ -445,6 +467,8 @@ class Track:
         snap = {0: [], 5: [], 10: [], 15: [], 20: [], 30: []}
         hit_t = []
         h = step_min / 60.0
+        ft = math.radians(self.cfg["turn"]) * FC_TURN * math.sqrt(step_min)   # виляння цілей: курс дифундує і в прогнозі
+        frnd = random.Random(self.id * 1000003 + int(self.t))   # окремий ГВЧ: прогноз не зсуває потік фільтра
         for q, w in zip(self.p, self.w):
             x, y, hd, v, dist = q
             t_in = None
@@ -456,6 +480,8 @@ class Track:
                 if rng and dist >= rng:
                     nx, ny = x, y
                 else:
+                    if ft > 0:
+                        hd += frnd.gauss(0, ft)
                     d = v * h
                     nx, ny = x + d * math.sin(hd), y + d * math.cos(hd)
                     dist += d
@@ -690,6 +716,7 @@ class Tracker:
             else:
                 tr.last_obs = ts; tr.nobs += 1; tr.src.add(src); tr.count = max(tr.count, cues["count"])
                 tr.last_pos = [int(ts), round(p["lat"], 4), round(p["lon"], 4), round(sigma, 1)]
+                tr.add_trail(ts)
                 touched.append(("update", tr.id))
         if best is None or bm <= 0.08:
             head, kappa = None, 0.0
@@ -762,7 +789,8 @@ class Tracker:
             out.append(dict(id=tr.id, type=tr.type, label=tr.cfg["label"], ch=tr.cfg["ch"], cls=tr.cfg["cls"], likely=lt,
                             count=tr.count, lat=round(lat, 4), lon=round(lon, 4), heading=round(math.degrees(hd)),
                             heading_conf=round(Rh, 2), speed=round(v), sd_km=round(sd, 1),
-                            age_s=int(now - tr.last_obs), obs=tr.nobs, src=sorted(tr.src), **f))
+                            age_s=int(now - tr.last_obs), obs=tr.nobs, src=sorted(tr.src),
+                            trail=[[p[1], p[2]] for p in getattr(tr, "trail", [])], **f))
         # балістика/КАБ «подією»: без траєкторії — апріорна ймовірність за збігом району/області
         for (t0, typ, reg, ob, place) in self.events:
             if reg is not None and reg >= 0 and reg == user_region:
@@ -777,7 +805,7 @@ class Tracker:
             out.append(dict(id=-int(t0) % 100000, type=typ, label=TYPES[typ]["label"], ch=TYPES[typ]["ch"], cls="missile",
                             count=1, lat=place["lat"] if place else None, lon=place["lon"] if place else None,
                             heading=None, heading_conf=0, speed=TYPES[typ]["v"][0], sd_km=None, age_s=int(now - t0),
-                            obs=1, src=["event"], likely=None, p={5: p, 15: p, 30: p}, eta_min=max(0.0, round(3 - age, 1)), path=[], dist_km=None))
+                            obs=1, src=["event"], likely=None, p={5: p, 15: p, 30: p}, eta_min=max(0.0, round(3 - age, 1)), path=[], dist_km=None, trail=[]))
         # спершу небезпечні, далі ближчі (щоб при p=0 на мапі були різні цілі, а не перші за часом)
         out.sort(key=lambda d: (-d["p"][30], d["dist_km"] if d["dist_km"] is not None else 9999))
         return out
@@ -866,7 +894,7 @@ def tracker_dump(trk, extra=None, max_seen=600):
     for tr in trk.tracks:
         tracks.append({"id": tr.id, "type": tr.type, "lat0": tr.proj.lat0, "lon0": tr.proj.lon0, "t": tr.t,
                        "born": tr.born, "last_obs": tr.last_obs, "count": tr.count, "src": sorted(tr.src),
-                       "nobs": tr.nobs, "p": [[_r(x, 3) for x in pp] for pp in tr.p], "w": [_r(x, 8) for x in tr.w]})
+                       "nobs": tr.nobs, "trail": getattr(tr, "trail", []), "p": [[_r(x, 3) for x in pp] for pp in tr.p], "w": [_r(x, 8) for x in tr.w]})
     seen = sorted(trk.seen_posts)[-max_seen:]
     return {"v": 1, "next_id": Track._next, "tracks": tracks, "seen_posts": seen,
             "events": [list(e) for e in trk.events], "home": trk.home, "extra": extra or {}}
@@ -887,6 +915,7 @@ def tracker_load(trk, d):
         tr.t, tr.born, tr.last_obs = s["t"], s["born"], s["last_obs"]
         tr.count, tr.src, tr.nobs, tr.rnd = s["count"], set(s["src"]), s["nobs"], trk.rnd
         tr.p, tr.w = [list(map(float, pp)) for pp in s["p"]], [float(x) for x in s["w"]]
+        tr.trail = [list(x) for x in s.get("trail", [])][-TRAIL_MAX:]
         sw = sum(tr.w) or 1.0
         tr.w = [x / sw for x in tr.w]
         trk.tracks.append(tr)

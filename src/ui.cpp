@@ -777,7 +777,8 @@ static uint8_t s_ntgt = 0;
 // Ціль розрізняється лише кольором і силуетом (без підписів). Кольори обрано так, щоб не зливалися
 // із заливкою областей (зелена/жовта/помаранчева/червона): дрони — фіолетовий «шахед» з білою+темною обвідкою,
 // крилаті ракети / КАБ — червоний ромб з білою обвідкою, балістика — блакитний ромб з темною обвідкою,
-// інше / невідомо — помаранчевий з білою обвідкою. Курс — білий пунктир з темною підкладкою.
+// інше / невідомо — помаранчевий з білою обвідкою. Курс — білий пунктир з темною підкладкою;
+// пройдений шлях — дрібний пунктир кольором цілі з темною підкладкою.
 #define TC_DRONE   0xB44CFF
 #define TC_MISSILE 0xFF2B2B
 #define TC_BALL    0x2EE6FF
@@ -793,8 +794,8 @@ static uint32_t targetColor(char ch) {
 }
 
 // пунктир: phase переноситься між відрізками, щоб штрихи йшли рівно по ламаній
-static void dashLine(lv_draw_ctx_t* dc, const lv_draw_line_dsc_t* ln, lv_point_t a, lv_point_t b, float& phase) {
-  const float ON = 4, PER = 7;
+static void dashLine(lv_draw_ctx_t* dc, const lv_draw_line_dsc_t* ln, lv_point_t a, lv_point_t b, float& phase,
+                     float ON = 4, float PER = 7) {
   float dx = b.x - a.x, dy = b.y - a.y, L = sqrtf(dx * dx + dy * dy);
   if (L < 0.5f) return;
   dx /= L; dy /= L;
@@ -848,6 +849,10 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
       int r = LV_CLAMP(2, (int)(t.psd[i] * KM_PX + 0.5f), s_zoom ? 40 : 16);
       bb.x1 = LV_MIN(bb.x1, q.x - r); bb.y1 = LV_MIN(bb.y1, q.y - r); bb.x2 = LV_MAX(bb.x2, q.x + r); bb.y2 = LV_MAX(bb.y2, q.y + r);
     }
+    for (int i = 0; i < t.ntr; i++) {
+      lv_point_t q = mapPt(c, t.tla[i], t.tlo[i]);
+      bb.x1 = LV_MIN(bb.x1, q.x); bb.y1 = LV_MIN(bb.y1, q.y); bb.x2 = LV_MAX(bb.x2, q.x); bb.y2 = LV_MAX(bb.y2, q.y);
+    }
     bb.x1 -= 4; bb.y1 -= 4; bb.x2 += 4; bb.y2 += 4;
     lv_area_t tmp;
     if (!_lv_area_intersect(&tmp, &bb, clip)) continue;
@@ -857,6 +862,19 @@ static void drawTargets(lv_draw_ctx_t* dc, const lv_area_t& c) {
       int r = LV_CLAMP(2, (int)(t.psd[i] * KM_PX + 0.5f), s_zoom ? 40 : 16);
       lv_area_t a = {(lv_coord_t)(q.x - r), (lv_coord_t)(q.y - r), (lv_coord_t)(q.x + r), (lv_coord_t)(q.y + r)};
       lv_draw_rect(dc, &cone, &a);
+    }
+    // пройдений шлях: дрібний пунктир кольором цілі на темній підкладці (цілі виляють — ламана, не пряма)
+    if (t.ntr) {
+      lv_draw_line_dsc_t trC = lnW; trC.color = tc;
+      for (int pass = 0; pass < 2; pass++) {
+        float phase = 0;
+        lv_point_t prev = mapPt(c, t.tla[0], t.tlo[0]);
+        for (int i = 1; i <= t.ntr; i++) {
+          lv_point_t q = i < t.ntr ? mapPt(c, t.tla[i], t.tlo[i]) : p0;
+          dashLine(dc, pass ? &trC : &lnD, prev, q, phase, 2, 5);
+          prev = q;
+        }
+      }
     }
     for (int pass = 0; pass < 2; pass++) {
       const lv_draw_line_dsc_t* ln = pass ? &lnW : &lnD;
@@ -1094,7 +1112,9 @@ static void cardLines(const AppState& s, Level L, String ln[4]) {
     ln[1] += L == LVL_RED ? ", ваш район" : L == LVL_ORANGE ? ", місто" : ", область";
   }
   int pn = s.pBallistic > s.pNear ? s.pBallistic : s.pNear;
-  ln[2] = s.trkOk ? "Ймовірність прольоту поруч за 30 хв: " + String(pn) + "%" : String("Ймовірність прольоту поруч за 30 хв: —");
+  // червона тривога: рядок ймовірності не показуємо (рішення користувача — цифра лише відволікає, треба в укриття)
+  if (L == LVL_RED) ln[2] = "";
+  else ln[2] = s.trkOk ? "Ймовірність прольоту поруч за 30 хв: " + String(pn) + "%" : String("Ймовірність прольоту поруч за 30 хв: —");
   ln[3] = s.ltName[0] && s.ltP ? "Ймовірна ціль " + String(s.ltName) + " — " + String(s.ltP) + "%" : String("Ймовірна ціль: —");
 }
 
@@ -1371,7 +1391,7 @@ static void updateMain(bool full) {
     cardLines(snap, L, ln);
     // картка: статично 2 з 4 рядків (тип + куди; ймовірність поруч або ймовірна ціль), повністю — у «Деталях»
     lv_label_set_text(s_cardTitle, preview ? "Тест кольору екрана" : ln[1].c_str());
-    lv_label_set_text(s_cardText, (L > LVL_GREEN && snap.trkOk ? ln[2] : ln[3]).c_str());
+    lv_label_set_text(s_cardText, (L > LVL_GREEN && L != LVL_RED && snap.trkOk ? ln[2] : ln[3]).c_str());
   }
   autoZoom(snap);
   // графік відключень: щохвилини (зміна півгодинки) або при оновленні даних
@@ -1422,6 +1442,7 @@ static void showDetail() {
   cardLines(s, s.level, ln);
   lv_obj_set_style_pad_row(cont, 10, 0);
   for (int i = 0; i < 4; i++) {
+    if (!ln[i].length()) continue;
     lv_obj_t* l = mkLabel(cont, ln[i].c_str(), i == 1 ? &font_ua_18 : &font_ua_14, i == 1 ? levelColor(s.level) : C_TEXT);
     lv_obj_set_width(l, 300); lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
   }

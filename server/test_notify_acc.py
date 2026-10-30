@@ -79,6 +79,7 @@ class DecideTest(unittest.TestCase):
             self.assertNotIn(bad, t)
         self.assertIn("Не летить на місто", tn.alert_text(dict(st, scope="oblast"), 2, cfg))
         self.assertIn("ваш район", tn.alert_text(dict(st, scope=None), 3, cfg))
+        self.assertNotIn("Проліт поруч", tn.alert_text(dict(st, scope=None), 3, cfg))   # червона: без ймовірності
         self.assertEqual(tn.clear_text(cfg, 1500), "🟢 Відбій · Кременчук\nтривала ~25 хв")
 
     def test_render(self):
@@ -87,7 +88,8 @@ class DecideTest(unittest.TestCase):
         except ImportError:
             self.skipTest("немає Pillow")
         st = {"regions": "." * 139, "region": 100, "tgt": [{"c": "S", "la": 49.3, "lo": 33.9, "hd": 250, "n": 2,
-                                                            "pt": [[49.25, 33.7, 5], [49.15, 33.5, 9]]}]}
+                                                            "pt": [[49.25, 33.7, 5], [49.15, 33.5, 9]],
+                                                            "tr": [[49.6, 34.6], [49.4, 34.4], [49.45, 34.1]]}]}
         png = tn.render_map(st, 49.068, 33.42, 2, CFG)
         self.assertTrue(png.startswith(b"\x89PNG"))
 

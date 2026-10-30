@@ -26,8 +26,13 @@ def forecast(self, ulat, ulon, R=15.0, horizons=(5, 15, 30), step_min=1.0):
     h = step_min / 60.0
     t_in = np.where(np.hypot(x - ux, y - uy) <= R, 0.0, np.nan)
     snap = {0: (x.copy(), y.copy())}
+    ft = math.radians(self.cfg["turn"]) * tk.FC_TURN * math.sqrt(step_min)   # виляння: дифузія курсу і в прогнозі
+    g = np.random.default_rng(self.id * 1000003 + int(self.t)) if ft > 0 else None   # окремий ГВЧ: не зсуває потік фільтра
     for k in range(1, nst + 1):
         mv = ~(dist >= rng) if rng else np.ones_like(x, dtype=bool)
+        if ft > 0:
+            hd = np.where(mv, hd + g.normal(0, ft, len(x)), hd)
+            sn, cs = np.sin(hd), np.cos(hd)
         d = np.where(mv, v * h, 0.0)
         nx, ny = x + d * sn, y + d * cs
         dist = dist + d

@@ -84,6 +84,14 @@ static MapTarget tgt(char ch, float lat, float lon, int hd, float kmh, int p, in
   t.npt = k;
   return t;
 }
+// пройдений шлях (від старих до нових точок) — цілі виляють
+static MapTarget trail(MapTarget t, std::initializer_list<float> ll) {
+  t.ntr = 0;
+  for (auto it = ll.begin(); it != ll.end() && it + 1 != ll.end() && t.ntr < MAX_TRAIL; it += 2) {
+    t.tla[t.ntr] = *it; t.tlo[t.ntr] = *(it + 1); t.ntr++;
+  }
+  return t;
+}
 static void setTargets(std::initializer_list<MapTarget> ts) {
   g_state.ntgt = 0;
   for (const MapTarget& t : ts) g_state.tgt[g_state.ntgt++] = t;
@@ -202,12 +210,14 @@ int main(int argc, char** argv) {
   clearAlerts(); resetThreat();
   oblAlert("Харківська", 'Y'); oblAlert("Сумська", 'R'); oblAlert("Донецька", 'R'); oblAlert("Луганська", 'Y');
   oblAlert("Полтавська", 'Y'); oblAlert("Запорізька", 'R'); oblAlert("АР Крим", 'Y'); regAlert("Олександрійський район", 'Y');
-  setTargets({tgt('S', 49.20f, 34.45f, 250, 150, 42, 12, 2), tgt('S', 48.87f, 34.65f, 290, 150, 21, -1, 1)});
+  setTargets({trail(tgt('S', 49.20f, 34.45f, 250, 150, 42, 12, 2), {49.47f, 35.28f, 49.30f, 35.05f, 49.38f, 34.80f, 49.24f, 34.64f}),
+              trail(tgt('S', 48.87f, 34.65f, 290, 150, 21, -1, 1), {48.62f, 35.30f, 48.78f, 35.12f, 48.70f, 34.88f})});
   g_state.trkLevel = LVL_ORANGE; g_state.pNear = 42; g_state.pDrone = 42; g_state.eta = 12;
   g_state.tgLevel = LVL_ORANGE; g_state.tgScore = 7; g_state.tgExplicit = true; strcpy(g_state.tgKind, "Дрони");
   strcpy(g_state.thr, "Дрони — Шахед/БпЛА, місто");
   strcpy(g_state.ltName, "Кременчук"); g_state.ltP = 55;
   mainShot("04_course_to_city_orange");
+  mainShot("08_trail_weave_zoom", 1);
   // 7 — деталі загрози для того ж стану
   showDetail(); run(800); shot("07_threat_details");
 

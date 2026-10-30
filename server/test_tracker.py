@@ -221,3 +221,37 @@ class CityCalTest(unittest.TestCase):
         cc = tk.load_city_cal()
         self.assertIn("drone", cc)
         self.assertIn(30, cc["drone"])
+
+
+class TrailWeaveTest(unittest.TestCase):
+    def _trk(self):
+        trk = tk.Tracker(seed=3)
+        tk.Track._next = 1
+        return trk
+
+    def test_trail_accumulates_and_persists(self):
+        trk = self._trk()
+        t0 = 1_800_000_000
+        for i, place in enumerate(["Шахед над Полтавою", "Шахед над Решетилівкою", "Шахед над Глобиним"]):
+            trk.add_post(place, t0 + i * 900, None, src="tg:x", post_id=f"x/{i}")
+        tr = max(trk.tracks, key=lambda t: len(getattr(t, "trail", [])))
+        self.assertGreaterEqual(len(tr.trail), 2)
+        self.assertLessEqual(len(tr.trail), tk.TRAIL_MAX)
+        d = tk.tracker_dump(trk)
+        trk2 = self._trk()
+        tk.tracker_load(trk2, d)
+        self.assertEqual([t.trail for t in trk2.tracks if t.id == tr.id][0], tr.trail)
+        a = trk.assess(49.07, 33.42, t0 + 2000)
+        self.assertTrue(any(len(x["trail"]) >= 2 for x in a))
+
+    def test_forecast_turn_diffusion_widens_cone(self):
+        rs = []
+        old = tk.FC_TURN
+        try:
+            for ft in (0.0, 2.0):
+                tk.FC_TURN = ft
+                tr = tk.Track("shahed", 49.6, 34.5, 5.0, 0, random.Random(7), heading=math.radians(250), kappa=50)
+                rs.append(tr.forecast(49.07, 33.42)["path"][-1][2])
+        finally:
+            tk.FC_TURN = old
+        self.assertGreater(rs[1], rs[0])

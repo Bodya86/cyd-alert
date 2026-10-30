@@ -392,6 +392,20 @@ def get_many(chs):
     return feeds, (min(ats) if ats else 0), errs
 
 
+def trail_compact(d, n=4):
+    """Пройдений шлях цілі для пристрою: ≤ n останніх точок [lat, lon] (від старих до нових), без точок < 2 км
+    від поточного положення (пунктир малюється від них до цілі)."""
+    out = []
+    for la, lo in (d.get("trail") or [])[::-1]:
+        q = {"lat": la, "lon": lo}
+        if tk_km(q, d) < 2 or (out and tk_km(q, {"lat": out[-1][0], "lon": out[-1][1]}) < 2):
+            continue
+        out.append([round(la, 3), round(lo, 3)])
+        if len(out) >= n:
+            break
+    return out[::-1]
+
+
 def tg_summary(feeds, city, district, now=None):
     lvl, best, ev, clusters = an.analyze_multi(feeds, city, district, now)
     bc = None
@@ -471,7 +485,8 @@ def state(q):
         pts = [pts[i] for i in (0, 2, 4) if i < len(pts)] if len(pts) >= 5 else pts[:3]   # 5, 15, 30 хв
         compact.append({"c": d["ch"], "la": d["lat"], "lo": d["lon"], "hd": d["heading"] if d["heading_conf"] >= 0.3 else -1,
                         "p": round(d["p"][30] * 100), "e": round(d["eta_min"]) if d["eta_min"] is not None else -1,
-                        "n": d["count"], "pt": [[p[0], p[1], round(min(p[2], 99))] for p in pts]})
+                        "n": d["count"], "pt": [[p[0], p[1], round(min(p[2], 99))] for p in pts],
+                        "tr": trail_compact(d)})
     balli = [d for d in tg if d["lat"] is None]
     # «ймовірна ціль»: для найнебезпечнішої з дронових цілей (P(ваше місто), якщо воно серед вузлів моделі)
     lt, lp = "", 0
