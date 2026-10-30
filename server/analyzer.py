@@ -46,7 +46,26 @@ LIVE_RE = re.compile(r"курс|пидлит|подлет|пидльот|лет�
 MKR_RE = re.compile(r"(?<![\w-])(мКР|МКР)(?![\w.-])")
 # «Іскандер-К» / «крилаті ракети» — крилата ракета (траєкторія, хвилини), не балістика
 CRUISE_RE = re.compile(r"крилат|крылат|[иі]скандер[\s-]*к\b")
+# прогноз / попередження / новини («США попередили про можливу масовану атаку протягом 48 годин», «за даними розвідки
+# переміщення Іскандерів…») — не загроза зараз (30.10 16:31: хибний червоний у Кременчуці). Текст — у fold()-формі.
+FORECAST_RE = re.compile(r"попередил|предупредил|попереджа|предупрежда|можлив(а|у|ий|ого|е|ои|им)\s+(\w+\s+){0,2}атак|возможн(ая|ую|ый|ого|ое|ой)\s+(\w+\s+){0,2}атак|"
+                         r"протягом\s+(найближчих|наступних)|в\s+течени[еи]\s+(ближайших|следующих)|найближч\w+\s+\d+\s*(годин|дн|доб)|"
+                         r"ближайш\w+\s+\d+\s*(час|дн|сут)|за\s+даними\s+(розвидк|гур|сзр|захидн)|по\s+данным\s+(разведк|гур)|"
+                         r"перемищенн|перемещени|розгортанн|развертывани|розгорта|загроз\w*\s+масован|угроз\w*\s+массирован|"
+                         r"готу\w+\s+(\w+\s+)?(масован|удар|атак)|готовит\w*\s+(\w+\s+)?(массирован|удар|атак)|розвидк\w*\s+(повидомл|фиксу)|"
+                         r"прогноз|аналитик|експерт|эксперт")
+# «прямо зараз»: курс/підліт/укриття/вибухи/пуски — пост живий навіть зі словом «можлива»
+LIVE_NOW_RE = re.compile(r"курс|пидлит|подлет|пидльот|летит|летить|летять|летят|укрит|укрыт|вибух|взрыв|\bпуск(и|ив|ов)?\b|запуск|"
+                         r"зараз|сейчас|терминово|срочно|над\s+(мистом|городом|нами)|злит|злет|взлет|\d+\s*(-\s*\d+\s*)?(хв|мин)")
+# підпис каналу внизу поста («📣 ППО Полтавщина») — не місце події (давав «полтав»/«Полтавщина» → балістика на область)
+SIGNATURE_RE = re.compile(r"\s*(📣|📢|👉)\s*[^\n📣📢]{0,40}$")
 BALLISTIC_RE = re.compile(r"балист|баллист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон")
+
+
+def is_forecast(t):
+    """Попередження/прогноз/новина про можливу атаку (fold-текст), а не ціль зараз."""
+    n = sum(1 for _ in FORECAST_RE.finditer(t))
+    return n >= 3 or (n >= 1 and not LIVE_NOW_RE.search(t))
 
 
 def is_report(t):
@@ -274,6 +293,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
     if home is None:
         home = not remote
     ev = PostEval()
+    text = SIGNATURE_RE.sub("", text or "")
     t = fold(text)
     if MKR_RE.search(text or ""):
         t += "бандерол "         # «мКР» (малогабаритна КР «Бандероль»), регістр важливий: «мкр.» — мікрорайон
@@ -285,6 +305,11 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
     if is_report(t):
         ev.ignored = True
         ev.reasons = ["звіт постфактум"]
+        return ev
+
+    if is_forecast(t):
+        ev.ignored = True
+        ev.reasons = ["попередження / прогноз, не ціль зараз"]
         return ev
 
     best, threat_w = threat_of(t)
@@ -434,7 +459,12 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
         ev.level = level_of(ev.cls, ev.prox, ev.oblast_wide or ballistic_obl, bool(settl_bonus))
         if best and best[1].get("cap") == "yellow":     # розвідник: відстежуємо, але сам не дає помаранчевий/червоний
             ev.level = min(ev.level, YELLOW)
-        ev.explicit = bool(in_city or dist_bonus or settl_bonus >= 2 or ev.oblast_wide or ballistic_obl)
+        if ev.threat == "ballistic":
+            # балістика без офіційної тривоги: лише пост прямо про ваше місто/район (з курсом/вибухами або короткий
+            # «Балістика на Кременчук!»); «балістика на область» / «хз звідки» — червоний тільки з тривогою в області
+            ev.explicit = bool((in_city or dist_bonus or settl_bonus >= 2) and (approach or escalate or len(t) <= 200))
+        else:
+            ev.explicit = bool(in_city or dist_bonus or settl_bonus >= 2 or ev.oblast_wide or ballistic_obl)
     return ev
 
 
