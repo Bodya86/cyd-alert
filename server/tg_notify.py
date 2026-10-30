@@ -5,12 +5,14 @@
 
   • підвищення до помаранчевого або червоного → sendPhoto (мапа PNG) / sendMessage, текст — 5 коротких рядків
     (місце, тип, летить/не летить, ймовірність прольоту, ймовірна ціль), без цитат постів і джерел;
+  • одне «живе» повідомлення на тривогу: мапа + текст редагуються кожні live_edit_s (10 с), якщо щось змінилось;
+    підвищення рівня / «· ближче» → нове повідомлення (зі звуком), попереднє видаляється;
   • без повторів: той самий або нижчий рівень протягом debounce_min (10 хв) не надсилається вдруге;
-  • повернення до зеленого (стабільно clear_after_min хв) після тривожного повідомлення → «🟢 Відбій»;
+  • повернення до зеленого (стабільно clear_after_min хв) → усі повідомлення епізоду видаляються, лишається «🟢 Відбій»;
   • секрети TG_BOT_TOKEN / TG_CHAT_ID відсутні → модуль мовчки нічого не робить.
 Стан (останній надісланий рівень/час) — <out>/notify_state.json, переживає перезапуски live.yml через гілку data.
 """
-import io, json, math, os, time, urllib.parse, urllib.request, uuid
+import io, json, math, os, time, urllib.error, urllib.parse, urllib.request, uuid
 os.environ.setdefault("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4")   # час у підписах — за Києвом (runner GitHub — UTC)
 time.tzset()
 
@@ -278,7 +280,14 @@ def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
 
 
 # ------------------------------------------------------------------ Bot API
-def _post(token, method, fields, files=None, timeout=25):
+class TgError(Exception):
+    def __init__(self, code, desc, retry_after=0):
+        super().__init__(f"{code} {desc}")
+        self.code, self.desc, self.retry_after = code, desc or "", retry_after or 0
+
+
+def _call(token, method, fields, files=None, timeout=25):
+    """Bot API → result; помилка → TgError (код, опис, retry_after). Токен у винятках/логах не з'являється."""
     url = f"https://api.telegram.org/bot{token}/{method}"
     if files:
         bnd = uuid.uuid4().hex
@@ -294,75 +303,250 @@ def _post(token, method, fields, files=None, timeout=25):
         req = urllib.request.Request(url, data=body.getvalue(), headers={"Content-Type": f"multipart/form-data; boundary={bnd}"})
     else:
         req = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode("utf-8"))
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8")).get("ok", False)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.loads(e.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            raise TgError(e.code, "http error") from None
+    except Exception as e:  # noqa: BLE001 — URL із токеном не друкуємо
+        raise TgError(0, type(e).__name__) from None
+    if not d.get("ok"):
+        raise TgError(d.get("error_code", 0), d.get("description", ""), (d.get("parameters") or {}).get("retry_after", 0))
+    return d.get("result")
+
+
+def _post(token, method, fields, files=None, timeout=25):   # сумісність (tg_test.py)
+    try:
+        return _call(token, method, fields, files, timeout) is not None
+    except TgError:
+        return False
+
+
+def live_sig(st, level, text):
+    """Підпис вмісту live-повідомлення: однаковий → нічого не редагуємо. Мапа — лише від рівня, областей і цілей."""
+    tg = [(t.get("k") or t.get("c"), round(t.get("la", 0), 3), round(t.get("lo", 0), 3), t.get("hd"), t.get("n"),
+           [tuple(round(x, 3) for x in p[:2]) for p in (t.get("pt") or [])],
+           [tuple(round(x, 3) for x in p[:2]) for p in (t.get("tr") or [])]) for t in (st.get("tgt") or [])]
+    m = json.dumps([level, st.get("regions"), st.get("region"), tg], ensure_ascii=False, default=str)
+    return {"map": uuid.uuid5(uuid.NAMESPACE_OID, m).hex, "text": text}
 
 
 class Notifier:
-    def __init__(self, out, cfg=None, token=None, chat=None, sender=None):
+    """Одне «живе» повідомлення на тривогу: мапа + 5 рядків, редагується кожні live_edit_s (10 с), якщо щось змінилось.
+    Підвищення рівня / «ближче» → нове повідомлення зі звуком, попереднє видаляється (завжди одне).
+    Відбій → видаляються всі повідомлення епізоду (id у notify_state.json, переживають перезапуск), лишається «🟢 Відбій».
+    threaded=True (rt_server): tick() лише передає стан фоновому потоку — мережа/рендер не гальмують цикл."""
+
+    def __init__(self, out, cfg=None, token=None, chat=None, sender=None, api=None, threaded=False):
         self.out = out
         self.cfg = cfg or load_cfg()
         self.token = token if token is not None else os.environ.get("TG_BOT_TOKEN", "").strip()
         self.chat = chat if chat is not None else os.environ.get("TG_CHAT_ID", "").strip()
         self.enabled = bool(self.token and self.chat)
-        self.sender = sender or self._send
+        self.sender = sender          # старий режим (лише надсилання) — для тестів/сумісності
+        self.api = api or (lambda m, f, files=None: _call(self.token, m, f, files))
         self.mem_path = os.path.join(out, "notify_state.json")
+        self.hold_until = 0.0         # 429: не чіпати API до цього часу
         try:
             with open(self.mem_path, encoding="utf-8") as f:
                 self.mem = json.load(f)
         except (OSError, ValueError):
             self.mem = {}
+        self._th = None
+        if threaded and self.enabled:
+            import threading
+            self._lock = threading.Lock()
+            self._ev = threading.Event()
+            self._pending = None
+            self._th = threading.Thread(target=self._worker, name="tg-notify", daemon=True)
+            self._th.start()
 
     def _save(self):
         try:
-            with open(self.mem_path, "w", encoding="utf-8") as f:
+            tmp = self.mem_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.mem, f)
+            os.replace(tmp, self.mem_path)
         except OSError:
             pass
 
-    def _send(self, text, png=None):
+    # ---- низькорівневі виклики з обробкою 429 / «not modified» / «not found»
+    def _api(self, method, fields, files=None):
+        if time.time() < self.hold_until:
+            raise TgError(429, "hold", self.hold_until - time.time())
+        try:
+            return self.api(method, dict(fields, chat_id=self.chat), files)
+        except TgError as e:
+            if e.code == 429:
+                self.hold_until = time.time() + max(1, e.retry_after) + 1
+                _log(f"{method}: 429, пауза {e.retry_after} с")
+            raise
+
+    def _png(self, st, level):
+        if not self.cfg.get("photo", True):
+            return None
+        try:
+            import server as srv
+            ulat, ulon, _ = srv.user_point({"city": self.cfg["city"], "district": self.cfg.get("district") or ""})
+            if ulat is not None:
+                return render_map(st, ulat, ulon, level, self.cfg)
+        except Exception as e:  # noqa: BLE001
+            _log("мапа:", e)
+        return None
+
+    def _send_new(self, text, png, silent=False):
+        """→ message_id | None"""
+        f = {"disable_notification": "true"} if silent else {}
         try:
             if png:
-                ok = _post(self.token, "sendPhoto", {"chat_id": self.chat, "caption": text[:1024]},
-                           {"photo": ("map.png", png, "image/png")})
-                if ok:
-                    return True
-            return _post(self.token, "sendMessage", {"chat_id": self.chat, "text": text[:4000], "disable_web_page_preview": "true"})
-        except Exception as e:  # noqa: BLE001 — токен у повідомленні не друкуємо
-            _log("помилка надсилання:", type(e).__name__, str(getattr(e, "code", "")))
-            return False
+                r = self._api("sendPhoto", dict(f, caption=text[:1024]), {"photo": ("map.png", png, "image/png")})
+                return (r or {}).get("message_id"), "photo"
+            r = self._api("sendMessage", dict(f, text=text[:4000], disable_web_page_preview="true"))
+            return (r or {}).get("message_id"), "text"
+        except TgError as e:
+            _log("надсилання:", e.code, e.desc[:80])
+            return None, None
 
-    def tick(self, now=None, st=None):
-        """Викликати після write_outputs. → "alert"/"clear"/None."""
-        if not self.enabled:
-            return None
-        now = now or time.time()
-        if st is None:
-            try:
-                with open(state_path(self.out, self.cfg), encoding="utf-8") as f:
-                    st = json.load(f)
-            except (OSError, ValueError):
+    def _delete(self, mid):
+        try:
+            self._api("deleteMessage", {"message_id": mid})
+            return True
+        except TgError as e:
+            if e.code == 429:
+                return False
+            return True   # уже видалене / старше 48 год — більше не пробуємо
+
+    def _edit(self, st, level, text, sig, now=None):
+        """Оновити live-повідомлення. → True (оновлено/без змін) | False (спробувати пізніше) | None (зникло)."""
+        lv = self.mem.get("live") or {}
+        mid, kind, old = lv.get("id"), lv.get("kind"), lv.get("sig") or {}
+        try:
+            if kind == "photo" and sig["map"] != old.get("map"):
+                png = self._png(st, level)
+                if png:
+                    media = json.dumps({"type": "photo", "media": "attach://map", "caption": text[:1024]}, ensure_ascii=False)
+                    self._api("editMessageMedia", {"message_id": mid, "media": media}, {"map": ("map.png", png, "image/png")})
+                else:
+                    self._api("editMessageCaption", {"message_id": mid, "caption": text[:1024]})
+            elif kind == "photo":
+                self._api("editMessageCaption", {"message_id": mid, "caption": text[:1024]})
+            else:
+                self._api("editMessageText", {"message_id": mid, "text": text[:4000], "disable_web_page_preview": "true"})
+        except TgError as e:
+            d = e.desc.lower()
+            if "not modified" in d:
+                pass
+            elif "not found" in d or "can't be edited" in d or "message_id_invalid" in d:
                 return None
+            else:
+                if e.code != 429:
+                    _log("редагування:", e.code, e.desc[:80])
+                return False
+        lv.update(sig=sig, at=now or time.time())
+        self.mem["live"] = lv
+        return True
+
+    # ---- логіка
+    def _process(self, st, now):
         level = LV.get(st.get("final"), 0)
         act = decide(self.mem, level, now, self.cfg, key=(st.get("kind") or "", st.get("scope") or ""))
         res = None
+        if self.sender:   # старий режим: лише надсилати
+            if act and act[0] in ("alert", "alert+"):
+                ok = self.sender(alert_text(st, level, self.cfg, update=act[0] == "alert+"), self._png(st, level))
+                _log(f"{act[0]} {level}: {'надіслано' if ok else 'НЕ надіслано'}")
+                res = "alert"
+            elif act and act[0] == "clear":
+                self.sender(clear_text(self.cfg, act[1]), None)
+                res = "clear"
+            self.mem["level"] = level
+            self._save()
+            return res
+        ep = self.mem.setdefault("episode", [])
         if act and act[0] in ("alert", "alert+"):
-            png = None
-            if self.cfg.get("photo", True):
-                try:
-                    import server as srv
-                    ulat, ulon, _ = srv.user_point({"city": self.cfg["city"], "district": self.cfg.get("district") or ""})
-                    if ulat is not None:
-                        png = render_map(st, ulat, ulon, level, self.cfg)
-                except Exception as e:  # noqa: BLE001
-                    _log("мапа:", e)
-            ok = self.sender(alert_text(st, level, self.cfg, update=act[0] == "alert+"), png)
-            _log(f"{act[0]} {level}: {'надіслано' if ok else 'НЕ надіслано'}")
+            upd = act[0] == "alert+"
+            text = alert_text(st, level, self.cfg, update=upd)
+            mid, kind = self._send_new(text, self._png(st, level))
+            _log(f"{act[0]} {level}: {'надіслано' if mid else 'НЕ надіслано'}")
+            if mid:
+                prev = (self.mem.get("live") or {}).get("id")
+                ep.append(mid)
+                self.mem["live"] = {"id": mid, "kind": kind, "upd": upd, "level": level,
+                                    "sig": live_sig(st, level, text), "at": now}
+                if prev and self._delete(prev) and prev in ep:
+                    ep.remove(prev)
             res = "alert"
         elif act and act[0] == "clear":
-            ok = self.sender(clear_text(self.cfg, act[1]), None)
-            _log(f"відбій: {'надіслано' if ok else 'НЕ надіслано'}")
+            left = []
+            for mid in list(ep):
+                if not self._delete(mid):
+                    left.append(mid)
+            self.mem["episode"] = left
+            self.mem["live"] = None
+            r, _ = self._send_new(clear_text(self.cfg, act[1]), None)
+            _log(f"відбій: {'надіслано' if r else 'НЕ надіслано'}; видалено {len(ep) - len(left)}, лишилось {len(left)}")
             res = "clear"
+        elif self.mem.get("active") and (self.mem.get("live") or {}).get("id") and level >= 1:
+            lv = self.mem["live"]
+            if now - lv.get("at", 0) >= float(self.cfg.get("live_edit_s", 10)):
+                text = alert_text(st, level, self.cfg, update=lv.get("upd", False))
+                sig = live_sig(st, level, text)
+                if sig != lv.get("sig"):
+                    r = self._edit(st, level, text, sig, now)
+                    if r is None:   # повідомлення видалили вручну — нове, без звуку
+                        mid, kind = self._send_new(text, self._png(st, level), silent=True)
+                        if mid:
+                            ep.append(mid)
+                            self.mem["live"] = dict(lv, id=mid, kind=kind, sig=sig, at=now)
+                    elif r:
+                        res = "edit"
+                else:
+                    lv["at"] = now
+        elif not self.mem.get("active") and ep:   # хвости (429 при відбої) — дочищаємо
+            self.mem["episode"] = [m for m in ep if not self._delete(m)]
         self.mem["level"] = level
         self._save()
         return res
+
+    def _load_state(self):
+        try:
+            with open(state_path(self.out, self.cfg), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def _worker(self):
+        while True:
+            self._ev.wait(15)
+            self._ev.clear()
+            with self._lock:
+                st, now = self._pending or (None, None)
+                self._pending = None
+            if st is None:
+                st, now = self._load_state(), time.time()
+            if st is None:
+                continue
+            try:
+                self._process(st, now or time.time())
+            except Exception as e:  # noqa: BLE001
+                _log("помилка:", type(e).__name__, str(e)[:120])
+            time.sleep(1)
+
+    def tick(self, now=None, st=None):
+        """Викликати після write_outputs. → "alert"/"clear"/"edit"/None (у threaded-режимі — завжди None)."""
+        if not self.enabled:
+            return None
+        if self._th:
+            with self._lock:
+                self._pending = (st, now) if st is not None else None
+            self._ev.set()
+            return None
+        now = now or time.time()
+        if st is None:
+            st = self._load_state()
+            if st is None:
+                return None
+        return self._process(st, now)

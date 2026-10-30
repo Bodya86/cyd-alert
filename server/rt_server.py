@@ -246,7 +246,7 @@ class Engine(threading.Thread):
             t0 = time.time()
             while time.time() - t0 < 20 and not srv.jaam.snapshot()[2]:
                 time.sleep(0.5)
-        notifier = tg_notify.Notifier(out)
+        notifier = tg_notify.Notifier(out, threaded=True)   # мережа/рендер мапи — у фоновому потоці
         STATS["notify"] = notifier.enabled
         log("telegram-сповіщення: " + ("увімкнено" if notifier.enabled else "вимкнено (немає TG_BOT_TOKEN/TG_CHAT_ID у /etc/cyd-alert/env)"))
         acc = accuracy.AccuracyLog(out)
