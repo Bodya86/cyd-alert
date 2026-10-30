@@ -359,13 +359,31 @@ MAX_POSTS = 40
 INGEST = {"new_at": 0.0, "new_src": None, "mt_new": 0, "web_new": 0}   # коли востаннє з'явився НОВИЙ пост (id)
 
 
+LAG = {"mt": [], "web": []}   # затримка «пост опубліковано → сервер побачив», с (останні 100 на джерело)
+
+
 def _seen_new(c, posts, src):
     have = {p.get("id") for p in c["posts"]}
-    n = sum(1 for p in posts if p.get("id") not in have)
-    if n and c["posts"]:                       # перше читання каналу — не «нові»
-        INGEST.update(new_at=time.time(), new_src=src)
-        INGEST[f"{src}_new"] = INGEST.get(f"{src}_new", 0) + n
-    return n
+    new = [p for p in posts if p.get("id") not in have]
+    if new and c["posts"]:                     # перше читання каналу — не «нові»
+        now = time.time()
+        INGEST.update(new_at=now, new_src=src)
+        INGEST[f"{src}_new"] = INGEST.get(f"{src}_new", 0) + len(new)
+        top = max((p.get("id", -1) for p in c["posts"]), default=-1)
+        for p in new:                          # лише справді свіжі (id новіший), не догрузка історії
+            if p.get("ts") and p.get("id", -1) > top and 0 <= now - p["ts"] < 900:
+                LAG.setdefault(src, []).append(round(now - p["ts"], 1))
+                del LAG[src][:-100]
+    return len(new)
+
+
+def lag_stats():
+    out = {}
+    for k, v in LAG.items():
+        if v:
+            s = sorted(v)
+            out[k] = {"n": len(s), "p50": s[len(s) // 2], "p90": s[min(len(s) - 1, int(len(s) * 0.9))], "max": s[-1]}
+    return out
 
 
 def merge_web(ch, posts):

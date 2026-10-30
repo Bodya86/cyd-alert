@@ -418,6 +418,7 @@ def make_app(out):
              "tg_ok_n": STATS["tg_ok_n"], "last_post_age_s": _last_post_age(now),
              "new_post_age_s": round(now - srv.INGEST["new_at"], 1) if srv.INGEST["new_at"] else None,
              "new_post_src": srv.INGEST["new_src"],
+             "ingest_lag_s": srv.lag_stats(), "new_by_src": {"mt": srv.INGEST.get("mt_new", 0), "web": srv.INGEST.get("web_new", 0)},
              "mtproto": {k: tg_mtproto.STATUS[k] for k in ("state", "why", "rx", "errors")} |
                         {"joined": len(tg_mtproto.STATUS["joined"]),
                          "last_rx_age_s": round(now - tg_mtproto.STATUS["last_rx"], 1) if tg_mtproto.STATUS["last_rx"] else None}}
