@@ -77,7 +77,15 @@ class DecideTest(unittest.TestCase):
                             "Проліт поруч за 30 хв: 42% (~12 хв)\nЙмовірна ціль: Кременчук — 55%")
         for bad in ("@", "«", "kremen_sv", "шахед курсом", "Дані", "JAAM", "канал"):
             self.assertNotIn(bad, t)
-        self.assertIn("Не летить на місто", tn.alert_text(dict(st, scope="oblast"), 2, cfg))
+        # помаранчевий без курсу (ракети/КАБ в області) — не «летить на місто», а «ризик» (30.10)
+        self.assertIn("ризик для міста", tn.alert_text(dict(st, scope="oblast"), 2, cfg))
+        self.assertNotIn("Летить", tn.alert_text(dict(st, scope="oblast"), 2, cfg))
+        z = dict(st, zone="course", thr="Дрони · курс на Кременчук")
+        self.assertEqual(tn.alert_text(z, 2, cfg).split("\n")[1:3], ["Дрони ×2", "➡️ Курс на Кременчук"])
+        z = dict(st, zone="risk", kind="ballistic", thr="Балістика · в області, ризик для міста", tgt=[])
+        self.assertEqual(tn.alert_text(z, 2, cfg).split("\n")[1:3], ["Балістика", "⚠️ В області, ризик для міста"])
+        z = dict(st, zone="district", thr="Балістика · загроза вашому району", tgt=[])
+        self.assertEqual(tn.alert_text(z, 3, cfg).split("\n")[1:], ["Балістика", "🔴 Загроза вашому району", "Ймовірна ціль: Кременчук — 55%"])
         self.assertIn("ваш район", tn.alert_text(dict(st, scope=None), 3, cfg))
         self.assertNotIn("Проліт поруч", tn.alert_text(dict(st, scope=None), 3, cfg))   # червона: без ймовірності
         self.assertEqual(tn.clear_text(cfg, 1500), "🟢 Відбій · Кременчук\nтривала ~25 хв")

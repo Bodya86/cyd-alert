@@ -106,13 +106,38 @@ KIND_SHORT = {"Дрони": "Дрони — Шахед/БпЛА", "drone": "Др
 # «летить / не летить» — за полем scope (куди прямує ціль: область / район / місто / ваш район)
 SCOPE_LINE = {"district": "🔴 Летить на ваш район", "city": "➡️ Летить у бік міста",
               "raion": "↗️ У бік району, не на місто", "oblast": "⬜ Не летить на місто (загроза в області)"}
+# поле zone сервера (що реально відомо): помаранчевий без курсу — не «летить на місто», а «ризик» (рішення 30.10)
+ZONE_LINE = {"district": "🔴 Загроза вашому району", "risk": "⚠️ В області, ризик для міста",
+             "oblast": "⬜ В області"}
+
+
+def _acc(name):
+    """Знахідний відмінок однослівної назви на -а/-я (Полтава → Полтаву), як server.city_acc."""
+    if " " in name or "-" in name:
+        return name
+    return name[:-1] + "у" if name.endswith("а") else name[:-1] + "ю" if name.endswith("я") else name
+
+
+def _scope_line(st, level, place):
+    z = st.get("zone")
+    if z == "course":
+        return "➡️ Курс на " + _acc(place) if place else "➡️ Курс на місто"
+    if z == "oblast" and st.get("scope") in ("raion", "oblast") and st.get("kind") not in ("ballistic", "kab", "aircraft"):
+        return SCOPE_LINE[st["scope"]]
+    if z in ZONE_LINE:
+        return ZONE_LINE[z]
+    # старий стан без zone
+    sc = st.get("scope") or {3: "district", 2: "city"}.get(level)
+    if level == 2 and sc not in ("city", "district"):
+        return ZONE_LINE["risk"]
+    return SCOPE_LINE.get(sc)
 
 
 def _threat(st):
     """Лише тип загрози (без цитат/джерел): «Дрони — Шахед/БпЛА ×2»."""
     thr = (st.get("thr") or "").strip()
     if thr and thr != "Загроз немає":
-        name = thr.split(",")[0].strip()
+        name = thr.split(" · ")[0].split(",")[0].strip()
     else:
         k = (st.get("kind") or "").strip()
         name = KIND_SHORT.get(k, k or "Дрони — Шахед/БпЛА")
@@ -125,9 +150,9 @@ def alert_text(st, level, cfg, update=False):
     Без цитат постів, назв каналів, джерел і підпису з часом. update — уточнення («загроза ближче»)."""
     place = cfg.get("label") or cfg.get("city")
     lines = [f"{HEAD_ICON.get(level, '⚠️')} {place}" + (" · ближче" if update else ""), _threat(st)]
-    sc = st.get("scope") or {3: "district", 2: "city"}.get(level)
-    if sc in SCOPE_LINE:
-        lines.append(SCOPE_LINE[sc])
+    sl = _scope_line(st, level, (cfg.get("city_name") or (cfg.get("label") or "").split(",")[0].strip() or None))
+    if sl:
+        lines.append(sl)
     pn = st.get("p_near")
     if pn is not None and level < 3:   # червона тривога: без «Проліт поруч N%» — лише в укриття
         eta = st.get("eta", -1)
@@ -271,7 +296,8 @@ def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
     # шапка
     bar = {2: (255, 140, 26), 3: (229, 72, 77)}.get(level, (46, 160, 67))
     dr.rectangle([0, 0, w, 44 * S], fill=bar)
-    title = {2: "КУРС НА МІСТО", 3: "НЕБЕЗПЕКА"}.get(level, "ЧИСТО") + " · " + (cfg.get("label") or "")
+    orange = "КУРС НА МІСТО" if st.get("zone", "course") == "course" else "РИЗИК ДЛЯ МІСТА"
+    title = {2: orange, 3: "НЕБЕЗПЕКА"}.get(level, "ЧИСТО") + " · " + (cfg.get("label") or "")
     dr.text((14 * S, 8 * S), title, font=font(22, True), fill=(11, 15, 20))
     img = img.resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()
