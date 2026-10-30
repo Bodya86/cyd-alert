@@ -43,8 +43,15 @@ def state_path(out, cfg):
 
 
 # ------------------------------------------------------------------ рішення (чиста логіка, тестується)
-def decide(mem, level, now, cfg):
-    """mem — стан (змінюється на місці). → None | ("alert", level) | ("clear", тривалість_с)."""
+SCOPE_RANK = {"oblast": 1, "raion": 2, "city": 3, "district": 4}
+RED_KINDS = ("ballistic", "missile", "kab", "aircraft", "Балістика", "Ракети", "КАБ", "Авіація")
+
+
+def decide(mem, level, now, cfg, key=None):
+    """mem — стан (змінюється на місці). → None | ("alert", level) | ("alert+", level) | ("clear", тривалість_с).
+    key — (тип загрози, scope) поточного стану. «alert+» — уточнення без підвищення рівня: загроза наблизилась
+    (scope «область» → «місто») або змінився тип червоної загрози (балістика → крилаті ракети). 30.10: о 05:32 надіслано
+    «балістика на область», а о 05:56–05:59 «4–5 ракет на Кременчук» вже не надсилалось (рівень той самий)."""
     minl = LV.get(cfg.get("min_level", "orange"), 2)
     deb = float(cfg.get("debounce_min", 10)) * 60
     clr = float(cfg.get("clear_after_min", 3)) * 60
@@ -55,18 +62,30 @@ def decide(mem, level, now, cfg):
     # тоді наступне підвищення знову сповіщаємо (короткі «мерехтіння» рівня не дають повторів)
     if level < sent_lvl and now - mem.get("high_at", 0) >= deb:
         mem["sent_level"] = sent_lvl = level
+        mem["sent_key"] = mem["sent_kinds"] = None
+    key = list(key) if key else None
     if level >= minl:
         mem["green_since"] = 0
         if level > sent_lvl:
-            mem.update(sent_level=level, sent_at=now, high_at=now, active=True, since=mem.get("since") or now)
+            mem.update(sent_level=level, sent_at=now, high_at=now, active=True, since=mem.get("since") or now, sent_key=key,
+                       sent_kinds=[key[0]] if key else None)
             return ("alert", level)
+        old = mem.get("sent_key")
+        if key and old and level == sent_lvl and now - mem.get("sent_at", 0) >= float(cfg.get("update_min", 2)) * 60:
+            closer = SCOPE_RANK.get(key[1], 0) > SCOPE_RANK.get(old[1], 0)
+            kinds = mem.get("sent_kinds") or [old[0]]
+            kind = level >= 3 and key[0] not in kinds and key[0] in RED_KINDS     # кожен новий тип — один раз за подію
+            if closer or kind:
+                mem.update(sent_at=now, high_at=now, sent_kinds=kinds + [key[0]],
+                           sent_key=[key[0], max(key[1:2] + old[1:2], key=lambda x: SCOPE_RANK.get(x, 0))])
+                return ("alert+", level)
         return None
     if level == 0 and mem.get("active"):
         if not mem.get("green_since"):
             mem["green_since"] = now
         if now - mem["green_since"] >= clr:
             dur = now - (mem.get("since") or now)
-            mem.update(active=False, sent_level=0, green_since=0, since=0, sent_at=now)
+            mem.update(active=False, sent_level=0, green_since=0, since=0, sent_at=now, sent_key=None, sent_kinds=None)
             return ("clear", dur) if cfg.get("send_clear", True) else None
         return None
     if level > 0:
@@ -94,11 +113,11 @@ def _threat(st):
     return name + (f" ×{n}" if n > 1 else "")
 
 
-def alert_text(st, level, cfg):
+def alert_text(st, level, cfg, update=False):
     """Коротко, 5 рядків: місце · тип · летить/не летить · ймовірність прольоту · ймовірна ціль.
-    Без цитат постів, назв каналів, джерел і підпису з часом."""
+    Без цитат постів, назв каналів, джерел і підпису з часом. update — уточнення («загроза ближче»)."""
     place = cfg.get("label") or cfg.get("city")
-    lines = [f"{HEAD_ICON.get(level, '⚠️')} {place}", _threat(st)]
+    lines = [f"{HEAD_ICON.get(level, '⚠️')} {place}" + (" · ближче" if update else ""), _threat(st)]
     sc = st.get("scope") or {3: "district", 2: "city"}.get(level)
     if sc in SCOPE_LINE:
         lines.append(SCOPE_LINE[sc])
@@ -303,9 +322,9 @@ class Notifier:
             except (OSError, ValueError):
                 return None
         level = LV.get(st.get("final"), 0)
-        act = decide(self.mem, level, now, self.cfg)
+        act = decide(self.mem, level, now, self.cfg, key=(st.get("kind") or "", st.get("scope") or ""))
         res = None
-        if act and act[0] == "alert":
+        if act and act[0] in ("alert", "alert+"):
             png = None
             if self.cfg.get("photo", True):
                 try:
@@ -315,8 +334,8 @@ class Notifier:
                         png = render_map(st, ulat, ulon, level, self.cfg)
                 except Exception as e:  # noqa: BLE001
                     _log("мапа:", e)
-            ok = self.sender(alert_text(st, level, self.cfg), png)
-            _log(f"alert {level}: {'надіслано' if ok else 'НЕ надіслано'}")
+            ok = self.sender(alert_text(st, level, self.cfg, update=act[0] == "alert+"), png)
+            _log(f"{act[0]} {level}: {'надіслано' if ok else 'НЕ надіслано'}")
             res = "alert"
         elif act and act[0] == "clear":
             ok = self.sender(clear_text(self.cfg, act[1]), None)

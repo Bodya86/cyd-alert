@@ -5,7 +5,8 @@
 і зведення по місту {"k":"sum","t","p_any","p_drone","p_missile","lvl","alert"} (alert — тривога в районі користувача).
 Траєкторія цілі — сирі положення з постів (Track.last_pos, σ ≤ 20 км), не відфільтроване середнє.
 Результат прогнозу — через 30 хв або коли ціль зникла (збита / долетіла / відбій / ttl):
-    {"k":"out","fid","id","t_fc","t","min_km","near","n_obs","gone","last","node","alert","alert_end"}
+    {"k":"out","fid","id","t_fc","t","min_km","near","n_obs","gone","last","node","alert","alert_end","trail"}
+  trail — сирі положення [[ts, lat, lon], …] цілі у вікні (куди вона полетіла насправді);
   min_km — мінімальна відстань від користувача до ламаної спостережень у вікні (t_fc, t_fc+30 хв]
   (з останньою точкою до прогнозу як початком); near = min_km ≤ R; None — нових спостережень не було;
   alert — тривога в районі користувача була в цьому вікні; alert_end — час відбою у вікні (якщо був);
@@ -125,7 +126,7 @@ class OutcomeLog:
             self.last_fc = now
             tg = assess()
             for d in tg:
-                if d.get("id", 0) <= 0 or d.get("lat") is None:
+                if d.get("id", 0) <= 0 or d.get("lat") is None or "event" in (d.get("src") or ()):   # балістика-«подія» без треку
                     continue
                 p30 = d["p"][30] if 30 in d["p"] else d["p"].get("30", 0)
                 if (d.get("dist_km") or 0) > MAX_KM and p30 <= 0:
@@ -183,7 +184,7 @@ class OutcomeLog:
             al, aend = self._alert_in(t0, min(t1, now))
             out.append(dict(k="out", fid=p["fid"], id=p["id"], t_fc=t0, t=int(now), min_km=None if mk is None else round(mk, 1),
                             near=None if mk is None else int(mk <= self.R), n_obs=len(tl), gone=int(gone and now < t1),
-                            last=last, node=node, alert=al, alert_end=aend))
+                            last=last, node=node, alert=al, alert_end=aend, trail=tl))
         self.pending = keep
         return out
 

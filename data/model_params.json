@@ -30,5 +30,54 @@
    "ll": -2.802
   },
   "enabled": false
+ },
+ "motion": {
+  "jet": {
+   "v": [
+    350,
+    80
+   ]
+  },
+  "shahed": {
+   "ttl": 1500
+  }
+ },
+ "motion_backtest": {
+  "tool": "tools/backtest_tracker.py",
+  "period": "2026-08-01..2026-10-29",
+  "split": "2026-10-12",
+  "metric": "track p30 BSS (ціль ≤15 км від Кременчука за 30 хв)",
+  "grid": "shahed v 150/170/190, turn 2/3/5, ttl 25/35/50 хв; jet v 350/450, ttl 15/25 хв",
+  "chosen": "jet v 350±80, shahed ttl 25 хв (інше без змін: shahed 170±15, turn 3; cruise 800±80)",
+  "observed_speeds_kmh": {
+   "shahed": {
+    "n": 20,
+    "median": 194,
+    "p25": 158,
+    "p75": 249
+   },
+   "jet": {
+    "n": 44,
+    "median": 439,
+    "p25": 314,
+    "p75": 549
+   }
+  },
+  "result_track_p30": {
+   "baseline_2c0533f": {
+    "train": 0.236,
+    "holdout": 0.082,
+    "all": 0.235,
+    "holdout_hit@0.15": 0.608,
+    "holdout_prec@0.15": 0.208
+   },
+   "final": {
+    "train": 0.331,
+    "holdout": 0.431,
+    "all": 0.395,
+    "holdout_hit@0.15": 0.88,
+    "holdout_prec@0.15": 0.429
+   }
+  }
  }
 }

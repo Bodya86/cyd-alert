@@ -35,6 +35,22 @@ def _load(name):
 
 
 RULES = _load("rules.json")
+# підсумки/звіти постфактум («За ніч ворог застосував…», «ЗБИТО/ПОДАВЛЕНО…», «Попередньо, вранці ворог застосував 6 ракет по Кременчуку»)
+# — не загроза зараз: без цього вони давали червоний рівень і сповіщення вранці (30.10 07:26). Текст — у fold()-формі.
+RETRO_RE = re.compile(r"(ворог\w*|противник\w*|окупант\w*|рф|росия|россия|враг)\s+(\w+\s+)?(застосував|применил|атакував|атаковал|"
+                      r"використав|использовал)")
+RETRO_HINT_RE = re.compile(r"\d|попередн|предварит|вранци|утром|вночи|ночью|вчора|вчера|минулої|прошлой")
+RETRO_STRONG_RE = re.compile(r"[зс]бито\s*/\s*подавлено|\b(у|в) (нич|ночь) на \d|за (нич|ночь|добу|сутки) (ворог|противник|враг)")
+LIVE_RE = re.compile(r"курс|пидлит|подлет|пидльот|летит|летить|летять|летят|укрит|укрыт|напрям|направлен|загроз|угроз|тривог|тревог|"
+                     r"вибух|взрыв|ппо|зараз|сейчас|работа|працю")
+# «Іскандер-К» / «крилаті ракети» — крилата ракета (траєкторія, хвилини), не балістика
+CRUISE_RE = re.compile(r"крилат|крылат|[иі]скандер[\s-]*к\b")
+BALLISTIC_RE = re.compile(r"балист|баллист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон")
+
+
+def is_report(t):
+    """Пост-підсумок постфактум (fold-текст)."""
+    return bool(RETRO_STRONG_RE.search(t)) or (bool(RETRO_RE.search(t)) and bool(RETRO_HINT_RE.search(t)) and not LIVE_RE.search(t))
 LOC = _load("locations.json")
 CHANNELS_CFG = _load("channels.json")["channels"]
 CHANNELS = {c["id"].lower(): c for c in CHANNELS_CFG}
@@ -218,7 +234,16 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
         ev.ignored = True
         return ev
 
+    if is_report(t):
+        ev.ignored = True
+        ev.reasons = ["звіт постфактум"]
+        return ev
+
     best, threat_w = threat_of(t)
+    if best and best[1]["type"] == "ballistic" and CRUISE_RE.search(t) and not BALLISTIC_RE.search(t):
+        mis = next((th for th in RULES["threats"] if th["type"] == "missile"), None)
+        if mis:
+            best = (2 if mis.get("level") == "red" else 1, mis)
     threat_label = best[1]["label"] if best else None
     approach = bool(_any(t, RULES["approach"]))
     escalate = bool(_any(t, RULES["escalate"]))

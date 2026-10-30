@@ -33,6 +33,25 @@ TYPES = {
 DRONE_TYPES = {k for k, v in TYPES.items() if v["cls"] == "drone"}
 
 
+def load_motion(path=None):
+    """data/model_params.json → "motion": {тип: {v: [м, σ], turn, ttl}} — калібрування tools/backtest_tracker.py (лише якщо holdout кращий)."""
+    try:
+        mp = json.load(open(path or os.path.join(DATA, "model_params.json"), encoding="utf-8")).get("motion") or {}
+    except (OSError, ValueError):
+        return {}
+    for typ, kv in mp.items():
+        for k, v in (kv.items() if typ in TYPES and isinstance(kv, dict) else ()):
+            if k in ("v", "turn", "ttl"):
+                TYPES[typ][k] = tuple(v) if isinstance(v, list) else v
+    return mp
+
+
+load_motion()
+SPLIT_DIGESTS = True     # дайджести з кількома цілями → окремі фрагменти (split_post)
+HEAD_ASSOC_KM = 150.0    # «курсом на X» без положення оновлює лише ціль, від якої X ≤ 150 км (0 — стара поведінка)
+HEAD_NEW_SIGMA = 30.0    # нова ціль біля X для «Область: … курсом на X» (0 — стара поведінка: зона каналу)
+
+
 # ---------------- геометрія ----------------
 class Proj:
     """Локальна рівнопроміжна проєкція навколо (lat0, lon0) — км."""
@@ -129,7 +148,13 @@ TYPE_WORDS = [
 KILL_WORDS = ["збит", "сбит", "мінус", "минус", "знищ", "уничтож", "приземл"]
 
 
+CRUISE_HINT = re.compile(r"крилат|крылат|[иі]скандер[\s-]*к\b")
+BALLISTIC_HINT = re.compile(r"баліст|баллист|балист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон")
+
+
 def detect_type(t, raw=None):
+    if CRUISE_HINT.search(t) and not BALLISTIC_HINT.search(t):
+        return "cruise"          # «Іскандер-К», «крилаті ракети» — крилата ракета з траєкторією, не балістика
     for typ, kws in TYPE_WORDS:
         if any(k in t for k in kws):
             return typ
@@ -145,8 +170,29 @@ def detect_type(t, raw=None):
     return None
 
 
-def parse_cues(text, gaz, city=None):
-    """→ dict(type, count, pos:[place], heading:[place], origin:[place], kill:bool)"""
+# підпис каналу («📣 ППО Полтавщина», «ППО Полтавщина» в кінці) — не місце цілі
+SIG_RE = re.compile(r"(📣[^\n]*$|\bППО\s+\w+щина\s*$)", re.I | re.M)
+# оголошення тривоги по району/громаді («Кременчуцький район, тривога: загроза БпЛА») — це не положення цілі
+ALERT_ONLY_RE = re.compile(r"(тривог|відбій|загроза застосування|загроза бпла|загроза балістики|угроза)", re.I)
+MOVE_RE = re.compile(r"(курс|напрям|бік|сторон|рух|лет|пролет|над |в районі|повз|біля|поблизу|вибух|збит|на |→)", re.I)
+
+
+def alert_only(text):
+    """Пост лише оголошує тривогу/загрозу для території, без руху цілі."""
+    s = SIG_RE.sub("", text or "")
+    if not ALERT_ONLY_RE.search(s):
+        return False
+    rest = ALERT_ONLY_RE.sub(" ", s)
+    rest = re.sub(r"загроз\w*|бпла|шахед\w*|ударн\w*|безпілот\w*|балістик\w*|ракет\w*|застосуван\w*", " ", rest, flags=re.I)
+    return not MOVE_RE.search(rest)
+
+
+def parse_cues(text, gaz, city=None, oblast=None):
+    """→ dict(type, count, pos:[place], heading:[place], origin:[place], kill:bool).
+    oblast — контекст області (заголовок «Полтавщина: …»): однойменні села в ній мають перевагу."""
+    text = SIG_RE.sub("", text or "")
+    if alert_only(text):
+        return dict(type=detect_type(" " + _norm(text) + " ", text), count=1, pos=[], heading=[], origin=[], kill=False)
     t = " " + _norm(text) + " "
     typ = detect_type(t, text)
     m = COUNT_RE.search(t)
@@ -156,7 +202,9 @@ def parse_cues(text, gaz, city=None):
     seen = set()
     for i, w in enumerate(words):
         nxt = words[i + 1] if i + 1 < len(words) else ""
-        p = gaz.find(w, nxt)
+        if len(w) > 6 and any(w.startswith(o) for o, _ in OBL_WORDS):
+            continue                     # «Полтавщина» — область, не місто Полтава
+        p = gaz.find(w, nxt, oblast)
         if not p or p["name"] in seen:
             continue
         seen.add(p["name"])
@@ -170,7 +218,7 @@ def parse_cues(text, gaz, city=None):
     # великі міста з російськими/укр. назвами (rules.json → places): «харьков», «днепр», «кривой рог»…
     try:
         import analyzer as an
-        ft = an.fold(text)
+        ft = re.sub(r"\w+щин\w*", " ", an.fold(text))      # назви областей ≠ обласні центри
         have = cues["pos"] + cues["heading"] + cues["origin"]
         for pl, role in an.find_places(ft):
             if any(abs(h["lat"] - pl["lat"]) < 0.15 and abs(h["lon"] - pl["lon"]) < 0.2 for h in have):
@@ -213,6 +261,51 @@ def parse_cues(text, gaz, city=None):
             if cp["name"] not in seen:
                 cues["pos"].append(cp)
     return cues
+
+
+# ---------------- дайджести: «Чернігівщина: БпЛА курсом на A, 3х Реактивні БпЛА курсом на B. Сумщина: …» ----------------
+OBL_WORDS = [("крим", 0), ("волин", 1), ("вінниччин", 2), ("винничин", 2), ("дніпропетровщин", 3), ("днепропетровщин", 3),
+             ("дніпровщин", 3), ("донеччин", 4), ("донетчин", 4), ("житомирщин", 5), ("закарпатт", 6), ("закарпат", 6),
+             ("запоріжж", 7), ("запорожь", 7), ("запорізьк", 7), ("прикарпатт", 8), ("франківщин", 8), ("київщин", 10), ("киевщин", 10),
+             ("кіровоградщин", 11), ("кировоградщин", 11), ("луганщин", 12), ("львівщин", 13), ("львовщин", 13),
+             ("миколаївщин", 14), ("николаевщин", 14), ("одещин", 15), ("одесчин", 15), ("полтавщин", 16), ("рівненщин", 17),
+             ("ровенщин", 17), ("сумщин", 19), ("тернопільщин", 20), ("тернопольщин", 20), ("харківщин", 21), ("харьковщин", 21),
+             ("херсонщин", 22), ("хмельниччин", 23), ("хмельнитчин", 23), ("черкащин", 24), ("буковин", 25),
+             ("чернігівщин", 26), ("черниговщин", 26)]
+OBL_HDR_RE = re.compile(r"(?=(?:[А-ЯІЇЄҐ][а-яіїєґ'’]+(?:щина|щини|ччина|ччини|ття|жжя|ччя))\s*[:—–-])")
+CLAUSE_RE = re.compile(r"(?=(?<![\w-])(?:\d{1,2}\s*[хx]\s*)?(?:(?:реактивн|швидкісн|ударн)\w*\s+)?(?:бпла|шахед|дрон|ракет|каб\b|мопед)\w*)", re.I)
+HEAD_CNT_RE = re.compile(r"(курсом|курс на|в напрямку|у напрямку|в бік|у бік|в сторону|в направлении)", re.I)
+
+
+def split_post(text):
+    """Пост → [(текст, область | None)]: заголовки областей стають контекстом (не положенням), а сегмент
+    з кількома «курсом на» ділиться на окремі цілі перед словом типу/кількості («3х Реактивні БпЛА …»).
+    Звичайний пост про одну ціль лишається одним фрагментом."""
+    out = []
+    for seg in OBL_HDR_RE.split(text):
+        seg = seg.strip()
+        if not seg:
+            continue
+        ob = None
+        m = re.match(r"([А-ЯІЇЄҐ][а-яіїєґ'’]+)\s*[:—–-]\s*", seg)
+        if m:
+            low = m.group(1).lower()
+            ob = next((o for w, o in OBL_WORDS if low.startswith(w)), None)
+            if ob is not None:
+                seg = seg[m.end():]
+        parts = [seg]
+        if len(HEAD_CNT_RE.findall(seg)) >= 2:
+            parts, cur = [], ""
+            for piece in CLAUSE_RE.split(seg):
+                if cur and HEAD_CNT_RE.search(cur) and piece.strip():
+                    parts.append(cur)
+                    cur = piece
+                else:
+                    cur += piece
+            if cur.strip():
+                parts.append(cur)
+        out += [(p.strip(" ,.;"), ob) for p in parts if p.strip(" ,.;")]
+    return out or [(text, None)]
 
 
 # ---------------- ціль ----------------
@@ -476,7 +569,19 @@ class Tracker:
             for tr in kill:
                 self.tracks.remove(tr)
             return [("kill", tr.id) for tr in kill]
-        return self.apply_cues(cues, ts, src, default_type)
+        parts = split_post(text) if SPLIT_DIGESTS else [(text, None)]
+        if len(parts) <= 1 and (not parts or parts[0][1] is None):
+            return self.apply_cues(cues, ts, src, default_type)
+        out, prev_t = [], None
+        for frag, ob in parts:
+            c = parse_cues(frag, self.gaz, city, ob)
+            if c["type"] is None:
+                c["type"] = prev_t or cues["type"]
+            prev_t = c["type"] or prev_t
+            c["oblast"] = ob
+            c["skip"] = {i for op, i in out if op in ("new", "update")}   # різні фрагменти одного посту — різні цілі
+            out += self.apply_cues(c, ts, src, default_type)
+        return out
 
     def apply_cues(self, cues, ts, src="tg", default_type=None):
         typ = cues["type"] or default_type
@@ -512,16 +617,41 @@ class Tracker:
         if not anchors:
             # лише курс без положення: оновлюємо найсвіжішу сумісну ціль поблизу району каналу
             if cues["heading"]:
-                cand = [tr for tr in self.tracks if self._compatible(tr, typ) and ts - tr.last_obs < 600]
+                h = cues["heading"][0]
+                if HEAD_ASSOC_KM:
+                    # ціль «курсом на X» — лише серед сумісних цілей, від яких X досяжний (≤ HEAD_ASSOC_KM), і
+                    # чий курс узгоджується з напрямком на X; раніше бралась найсвіжіша ціль будь-де в країні
+                    cand = []
+                    for tr in self.tracks:
+                        if not self._compatible(tr, typ) or ts - tr.last_obs >= 900 or tr.id in cues.get("skip", ()):
+                            continue
+                        x, y, hd, Rh, _, _ = tr.mean()
+                        hx, hy = tr.proj.xy(h["lat"], h["lon"])
+                        dk = math.hypot(hx - x, hy - y)
+                        if dk > HEAD_ASSOC_KM:
+                            continue
+                        agree = math.cos(ang_diff(bearing_xy(x, y, hx, hy), hd)) * Rh if dk > 10 else 1.0
+                        cand.append((agree - dk / HEAD_ASSOC_KM, tr))
+                    cand = [c for c in cand if c[0] > -0.5]
+                else:
+                    cand = [(tr.last_obs, tr) for tr in self.tracks if self._compatible(tr, typ) and ts - tr.last_obs < 600]
                 if cand:
-                    tr = max(cand, key=lambda x: x.last_obs)
-                    for h in cues["heading"]:
-                        tr.obs_heading_to(h["lat"], h["lon"])
+                    tr = max(cand, key=lambda c: c[0])[1]
+                    for hh in cues["heading"]:
+                        tr.obs_heading_to(hh["lat"], hh["lon"])
                     tr.last_obs = ts; tr.nobs += 1; tr.src.add(src)
                     touched.append(("update", tr.id))
+                elif HEAD_ASSOC_KM and HEAD_NEW_SIGMA < 0:
+                    pass         # курс без положення і без відповідної цілі — ігноруємо (нема де поставити ціль)
+                elif HEAD_ASSOC_KM and HEAD_NEW_SIGMA and (cues.get("oblast") is not None or not self.home):
+                    # дайджест «Область: БпЛА курсом на X» без положення: ціль на підльоті до X (σ HEAD_NEW_SIGMA км)
+                    tr = Track(typ, h["lat"], h["lon"], HEAD_NEW_SIGMA, ts, random.Random(self.rnd.random()),
+                               count=cues["count"], src=src)
+                    tr.obs_heading_to(h["lat"], h["lon"], kappa=4.0)
+                    self.tracks.append(tr)
+                    touched.append(("new", tr.id))
                 elif self.home:
                     # нова ціль «десь у зоні каналу» (σ 35 км навколо міста), курс на X
-                    h = cues["heading"][0]
                     tr = Track(typ, self.home["lat"], self.home["lon"], 35.0, ts, random.Random(self.rnd.random()),
                                count=cues["count"], src=src)
                     tr.obs_heading_to(h["lat"], h["lon"], kappa=4.0)
@@ -532,7 +662,7 @@ class Tracker:
         sigma = p["sigma"] + 3.0
         best, bm = None, 0.0
         for tr in self.tracks:
-            if not self._compatible(tr, typ):
+            if not self._compatible(tr, typ) or tr.id in cues.get("skip", ()):
                 continue
             m = tr.match(p["lat"], p["lon"], sigma)
             if m > bm:

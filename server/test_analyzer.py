@@ -102,5 +102,23 @@ class T(unittest.TestCase):
         self.assertEqual((lvl, best["id"], ev.kind), (an.RED, 2, "Ракети"))
 
 
+    def test_reports_after_the_fact_ignored(self):
+        # 30.10 07:26 — «Попередньо. вранці ворог застосував 6 крилатих ракет … по Кременчуку» дав червоне сповіщення
+        for t in ("Попередньо. вранці ворог застосував 6 крилатих ракет Іскандер-К по Кременчуку.",
+                  "За ніч ворог застосував: 9х Циркон/КН-23 по Кременчуку/Світловодську.",
+                  "⚡️ ЗБИТО/ПОДАВЛЕНО 99 ВОРОЖИХ ЦІЛЕЙ У ніч на 30 жовтня противник атакував балістичними ракетами"):
+            ev = an.analyze_post(t, "kremenchuk")
+            self.assertTrue(ev.ignored, t)
+            self.assertEqual(ev.level, an.GREEN)
+        for t in ("Ворог запустив балістику з Брянська", "Ворог атакував Кременчук, працює ППО",
+                  "м. Кременчук ❗️Перші 2 крилаті ракети атакували місто. Інші підлітають."):
+            self.assertFalse(an.analyze_post(t, "kremenchuk").ignored, t)
+
+    def test_iskander_k_is_cruise(self):
+        ev = an.analyze_post("Крилаті ракети, ймовірно «Іскандер-К» курсом на Кременчук", "kremenchuk")
+        self.assertEqual((ev.level, ev.threat), (an.RED, "missile"))
+        self.assertEqual(an.analyze_post("Балістика на Кременчук!", "kremenchuk").threat, "ballistic")
+
+
 if __name__ == "__main__":
     unittest.main()

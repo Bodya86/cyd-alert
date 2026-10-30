@@ -48,6 +48,24 @@ class DecideTest(unittest.TestCase):
         r = run([2, 0, 0, 2, 2])
         self.assertEqual(len(r), 1)
 
+    def test_update_closer_and_new_red_kind(self):
+        # 30.10: 05:32 «балістика на область» (червоний), 05:56 «ракети на Кременчук» — той самий рівень, але ближче/інший тип
+        mem, cfg = {}, dict(CFG, update_min=2)
+        self.assertEqual(tn.decide(mem, 3, 0, cfg, key=("Балістика", "oblast")), ("alert", 3))
+        self.assertIsNone(tn.decide(mem, 3, 60, cfg, key=("Балістика", "oblast")))
+        self.assertIsNone(tn.decide(mem, 3, 90, cfg, key=("Ракети", "city")))          # < 2 хв — ще рано
+        self.assertEqual(tn.decide(mem, 3, 200, cfg, key=("Ракети", "city")), ("alert+", 3))
+        self.assertIsNone(tn.decide(mem, 3, 400, cfg, key=("Ракети", "city")))
+        self.assertIsNone(tn.decide(mem, 3, 600, cfg, key=("Балістика", "city")))      # тип уже надсилали
+        self.assertIsNone(tn.decide(mem, 3, 800, cfg, key=("Ракети", "oblast")))       # віддалення — без повідомлення
+        self.assertEqual(tn.decide(mem, 3, 1000, cfg, key=("Ракети", "district")), ("alert+", 3))
+        self.assertEqual(tn.alert_text({"kind": "Ракети", "scope": "city"}, 3, cfg, update=True).split("\n")[0], "🔴 Кременчук · ближче")
+
+    def test_update_drone_kind_change_silent(self):
+        mem = {}
+        self.assertEqual(tn.decide(mem, 2, 0, CFG, key=("Дрони", "city")), ("alert", 2))
+        self.assertIsNone(tn.decide(mem, 2, 600, CFG, key=("Ціль", "city")))
+
     def test_texts(self):
         st = {"final": "orange", "kind": "Дрони", "reason": "шахед, Кременчук, курс", "p_near": 42, "eta": 12, "lt": "Кременчук",
               "lp": 55, "scope": "city", "scope_src": "post", "thr": "Дрони — Шахед/БпЛА, місто",
