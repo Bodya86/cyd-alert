@@ -203,7 +203,8 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
   if (approach && inCity) score += 2;
   else if (approach && settlBonus) score += 1;
   score += distBonus + settlBonus;
-  if (escalate) score += 3;
+  // «Дуже низько»/«вибухи» без прив'язки до вас із чужого каналу — не «над вами» (30.10: «мКР … в сторону с. Рокита … Дуже низько»)
+  if (escalate) score += (home || inCity || settlBonus || distBonus || raionHit || (nAt && nearestKm <= NEAR_PLACE_KM)) ? 3 : 1;
 
   if (threatLabel) addReason(ev.reason, sizeof(ev.reason), threatLabel);
   if (distBonus == 4) addReason(ev.reason, sizeof(ev.reason), "ваш район");

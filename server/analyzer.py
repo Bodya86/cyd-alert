@@ -333,7 +333,9 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
         score += 1
     score += dist_bonus + settl_bonus
     if escalate:
-        score += 3
+        # «Дуже низько» / «вибухи» без жодної прив'язки до вас (місто/район/село поруч) з чужого каналу — не «над вами»:
+        # 30.10 11:4x «мКР «Бандероль» … в сторону с. Рокита … Дуже низько» (~90 км) давав червоний Кременчуку
+        score += 3 if (home or in_city or settl_bonus or dist_bonus or near_place or raion_hit) else 1
 
     if threat_label: ev.reasons.append(threat_label)
     if dist_bonus == 4: ev.reasons.append("ваш район")
