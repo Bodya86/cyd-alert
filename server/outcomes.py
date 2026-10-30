@@ -143,7 +143,12 @@ class OutcomeLog:
             if summary is not None:
                 s = summary(tg)
                 g = lambda k: s[k][30] if 30 in s[k] else s[k].get("30")   # noqa: E731
+                g15 = lambda k: s[k][15] if 15 in s[k] else s[k].get("15")   # noqa: E731
+                rw = s.get("raw") or {}
+                raw = {k[2:]: [v.get(T, v.get(str(T))) for T in (5, 15, 30)] for k, v in rw.items()}   # для перекалібрування
                 recs.append(dict(k="sum", t=int(now), p_any=g("p_any"), p_drone=g("p_drone"), p_missile=g("p_missile"),
+                                 p_any15=g15("p_any"), p_drone15=g15("p_drone"), raw=raw or None,
+                                 nd=sum(1 for d in tg if d.get("cls") == "drone"), nm=sum(1 for d in tg if d.get("cls") == "missile"),
                                  lvl=s.get("level"), alert=None if alert is None else int(alert), n=len(tg)))
         recs += self._resolve(trk, alive, ulat, ulon, now)
         for i in [i for i in self.trails if i not in alive and not any(p["id"] == i for p in self.pending)]:

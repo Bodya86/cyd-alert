@@ -448,7 +448,7 @@ def state(q):
     # зона → рівень: область/район — жовтий, місто — помаранчевий, ваш район — червоний (дрони);
     # ракети (p_missile) — як раніше. Обрано район міста → червоний від дронів лише при P(ваш район) ≥ порогу.
     t_raw = summ["level"]
-    if q.get("district") and t_raw >= an.RED and summ["p_missile"][30] < 0.10 and sp.get("district", 0) < SCOPE_MIN_P["district"]:
+    if q.get("district") and t_raw >= an.RED and summ.get("raw", summ)["p_missile"][30] < 0.10 and sp.get("district", 0) < SCOPE_MIN_P["district"]:
         t_raw = an.ORANGE
     for k, p in sp.items():
         if obl_alert and p >= SCOPE_MIN_P[k]:   # без тривоги в області зона рівень не піднімає взагалі

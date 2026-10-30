@@ -198,16 +198,21 @@ def metrics(fc, out, sums, raw, split, hist_nodes, news):
             if pp:
                 P[f"track_p30_{ty}"] = brier_block(pp)
         # city: будь-яке сире положення ≤ R за (t, t+30 хв]
-        cp, ca = [], []
+        cb = {k: [] for k in ("city_drone30", "city_any30", "city_missile30", "city_drone15", "city_any15")}
         for s in sums:
             if not cond(s["t"]):
                 continue
-            i, j = bisect.bisect_right(nts, s["t"]), bisect.bisect_right(nts, s["t"] + 1800)
-            evs = near_raw[i:j]
-            cp.append((s["p_drone"], int(any(c == "drone" for _, c in evs))))
-            ca.append((s["p_any"], int(bool(evs))))
-        P["city_drone30"] = brier_block(cp)
-        P["city_any30"] = brier_block(ca)
+            for T in (30, 15):
+                i, j = bisect.bisect_right(nts, s["t"]), bisect.bisect_right(nts, s["t"] + T * 60)
+                evs = near_raw[i:j]
+                pd, pa = (s["p_drone"], s["p_any"]) if T == 30 else (s.get("p_drone15"), s.get("p_any15"))
+                if pd is not None:
+                    cb[f"city_drone{T}"].append((pd, int(any(c == "drone" for _, c in evs))))
+                    cb[f"city_any{T}"].append((pa, int(bool(evs))))
+                if T == 30 and s.get("p_missile") is not None:
+                    cb["city_missile30"].append((s["p_missile"], int(any(c == "missile" for _, c in evs))))
+        for k, v in cb.items():
+            P[k] = brier_block(v)
         # похибка положення: пряма з курсом/швидкістю прогнозу проти наступних сирих положень тієї ж цілі
         errs = {"5": [], "15": [], "30": []}
         for f in out:

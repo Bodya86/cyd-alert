@@ -194,3 +194,30 @@ class DetectTypeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CityCalTest(unittest.TestCase):
+    CAL = {"drone": {30: (0.1, -2.65), 15: (0.115, -3.19), 5: (0.135, -4.03)}, "any": {30: (0.17, -2.2)}}
+    T = [{"cls": "drone", "p": {5: .3, 15: .6, 30: .8}, "count": 3, "eta_min": 4}]
+
+    def test_calibrated_lower_monotone_level_from_raw(self):
+        s = tk.threat_summary(self.T, cal=self.CAL)
+        raw = tk.threat_summary(self.T, cal={})
+        self.assertLess(s["p_drone"][30], raw["p_drone"][30])
+        self.assertLessEqual(s["p_drone"][5], s["p_drone"][15])
+        self.assertLessEqual(s["p_drone"][15], s["p_drone"][30])
+        self.assertEqual(s["level"], raw["level"])            # рівень тривоги — з сирих
+        self.assertEqual(s["raw"]["p_drone"], raw["p_drone"])
+        self.assertEqual(s["p_missile"], raw["p_missile"])   # немає калібрування — сирі
+
+    def test_no_targets_zero(self):
+        s = tk.threat_summary([], cal=self.CAL)
+        self.assertEqual(s["p_drone"][30], 0.0)
+        self.assertEqual(s["p_any"][30], 0.0)
+        s = tk.threat_summary([{"cls": "missile", "p": {5: .1, 15: .2, 30: .3}, "count": 1, "eta_min": None}], cal=self.CAL)
+        self.assertEqual(s["p_drone"][30], 0.0)               # дронів немає → 0, а не базова частота
+
+    def test_params_file_loads(self):
+        cc = tk.load_city_cal()
+        self.assertIn("drone", cc)
+        self.assertIn(30, cc["drone"])

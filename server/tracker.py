@@ -47,6 +47,19 @@ def load_motion(path=None):
 
 
 load_motion()
+
+
+def load_city_cal(path=None):
+    """data/model_params.json → "city_cal": {"drone"|"any"|"missile": {"5"|"15"|"30": [a, b]}} — Platt-калібрування
+    зведення по місту (tools/fit_city_cal.py): p' = σ(a·logit(p) + b). Немає — сирі ймовірності."""
+    try:
+        cc = json.load(open(path or os.path.join(DATA, "model_params.json"), encoding="utf-8")).get("city_cal") or {}
+    except (OSError, ValueError):
+        return {}
+    return {c: {int(T): tuple(ab) for T, ab in v.items()} for c, v in cc.get("params", {}).items()} if cc.get("enabled", True) else {}
+
+
+CITY_CAL = load_city_cal()
 SPLIT_DIGESTS = True     # дайджести з кількома цілями → окремі фрагменти (split_post)
 HEAD_ASSOC_KM = 150.0    # «курсом на X» без положення оновлює лише ціль, від якої X ≤ 150 км (0 — стара поведінка)
 HEAD_NEW_SIGMA = 30.0    # нова ціль біля X для «Область: … курсом на X» (0 — стара поведінка: зона каналу)
@@ -796,9 +809,18 @@ def scope_probs(trk, zones, now=None, maxkm=260.0):
     return {k: round(1 - q[k], 3) for k in names}
 
 
-def threat_summary(targets):
+def _platt(p, ab):
+    p = min(0.999, max(0.001, p))
+    return 1 / (1 + math.exp(-(ab[0] * math.log(p / (1 - p)) + ab[1])))
+
+
+def threat_summary(targets, cal=None):
     """Загальна ймовірність, що хоча б одна ціль пройде в радіусі R: 1 − Π(1 − p_i).
-    Група з n цілей летить корельовано, тому замість 1−(1−p)^n беремо 1−(1−p)^√n."""
+    Група з n цілей летить корельовано, тому замість 1−(1−p)^n беремо 1−(1−p)^√n.
+    Сирі ймовірності переоцінюють (бектест: при 0.68 збувається ~19 %) → p_any/p_drone/p_missile калібруються
+    (CITY_CAL, Platt по горизонтах; немає цілей класу — 0). Рівень (level) — з сирих, як і раніше; сирі — у s["raw"]."""
+    cal = CITY_CAL if cal is None else cal
+
     def comb(cls, T):
         q = 1.0
         for d in targets:
@@ -806,16 +828,28 @@ def threat_summary(targets):
                 p = min(0.99, d["p"][T])
                 q *= (1 - p) ** math.sqrt(max(1, min(d["count"], 9)))
         return round(1 - q, 3)
-    s = {"p_any": {T: comb(None, T) for T in (5, 15, 30)},
-         "p_drone": {T: comb("drone", T) for T in (5, 15, 30)},
-         "p_missile": {T: comb("missile", T) for T in (5, 15, 30)}}
+    raw = {"p_any": {T: comb(None, T) for T in (5, 15, 30)},
+           "p_drone": {T: comb("drone", T) for T in (5, 15, 30)},
+           "p_missile": {T: comb("missile", T) for T in (5, 15, 30)}}
+    s = {k: dict(v) for k, v in raw.items()}
+    for k, cls in (("p_any", None), ("p_drone", "drone"), ("p_missile", "missile")):
+        c = cal.get(k[2:])
+        if not c or not any(cls is None or d["cls"] == cls for d in targets):
+            continue
+        prev = 1.0
+        for T in (30, 15, 5):                       # монотонно: p5 ≤ p15 ≤ p30
+            if T in c:
+                prev = min(prev, round(_platt(raw[k][T], c[T]), 3))
+                s[k][T] = prev
+    s["raw"] = raw
+    raw_s = raw
     etas = [d["eta_min"] for d in targets if d["eta_min"] is not None and d["p"][30] >= 0.1]
     s["eta_min"] = min(etas) if etas else None
     # рівні як в analyzer: 2 — помаранчевий (ціль, ймовірно, пройде в радіусі R від вас), 3 — червоний
     lvl = 0
-    if s["p_drone"][30] >= 0.15:
+    if raw_s["p_drone"][30] >= 0.15:
         lvl = 2
-    if s["p_drone"][15] >= 0.5 or s["p_missile"][30] >= 0.10:     # дрон майже напевно поруч / ракети
+    if raw_s["p_drone"][15] >= 0.5 or raw_s["p_missile"][30] >= 0.10:     # дрон майже напевно поруч / ракети
         lvl = 3
     s["level"] = lvl
     return s
