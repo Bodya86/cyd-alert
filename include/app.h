@@ -34,6 +34,8 @@ struct Settings {
   bool showRoutes = false;     // шар «типові маршрути» (історична модель) на зумі області
   bool battery = false;        // показувати заряд АКБ (дільник на BAT_ADC_PIN); без дільника вхід «висить» — тому вимкнено за замовчуванням
   bool autoUpdate = true;      // OTA: самостійно встановлювати нові релізи (не під час загрози)
+  bool otaBeta = false;        // тестовий канал OTA: отримувати нові версії до «стабільних» (перевірка частіше)
+  bool nightQuiet = false;     // нічний тихий режим 23:00–07:00: звук лише на червоному (LED і екран — як завжди)
   // графік відключень світла
   uint8_t outMode = OUT_MODE_AUTO;   // OUT_MODE_OFF / AUTO / MANUAL
   int8_t outGroup = -1;              // індекс у OUTAGE_GROUPS ("1.1".."6.2"), -1 — не обрано
@@ -149,14 +151,20 @@ int hwBatteryMv();          // напруга АКБ, мВ (кеш, оновле
 int hwBatteryPct(int mv);   // заряд LiPo за кривою розряду, 0..100
 void notifyInit();
 void notifyLoop();
-void notifyLevel(Level l, bool near = false);   // запуск звуку/LED для рівня (near — ціль поруч)
+void notifyLevel(Level l, bool near = false, bool ballistic = false);   // звук/LED для рівня (ballistic — окремий малюнок на червоному)
 void notifySilence();        // вимкнути звук (LED лишається)
 void notifyTest(Level l);
+void notifyMute(uint32_t ms);       // тиша на ms (дотик до картки — 10 хв); ескалація до червоного все одно звучить
+uint32_t notifyMutedLeftMs();       // скільки ще тиші, 0 — немає
+void notifyStaleBeep();             // короткий сигнал «втрачено зв'язок / дані застаріли»
+bool notifyNight();                 // зараз нічний тихий режим (23:00–07:00, якщо увімкнено)
 
 void netStart();             // запуск фонової задачі (core 0)
 void netForceRefresh();
 int netChannelStatus(int i, Level* lvl);   // 0 — ще не читали, 1 — ок, 2 — помилка (i = CHANNEL_COUNT — власний канал)
 const char* netCloudSrc();                 // "GitHub API" / "GitHub raw" / "Pages" / "—"
+uint32_t netDataAgeMs();                   // мс від останнього успішного отримання даних (UINT32_MAX — ще не було)
+#define STALE_MS 240000UL                   // дані старші за 4 хв (або немає Wi-Fi > 60 с) — «немає зв'язку»
 void netOutageRefresh();     // перечитати графік відключень (змінилась черга/режим)
 
 void uiInit();

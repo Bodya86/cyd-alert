@@ -355,6 +355,43 @@ def tg_loop():
         time.sleep(TG_POLL)
 
 
+MAX_POSTS = 40
+INGEST = {"new_at": 0.0, "new_src": None, "mt_new": 0, "web_new": 0}   # коли востаннє з'явився НОВИЙ пост (id)
+
+
+def _seen_new(c, posts, src):
+    have = {p.get("id") for p in c["posts"]}
+    n = sum(1 for p in posts if p.get("id") not in have)
+    if n and c["posts"]:                       # перше читання каналу — не «нові»
+        INGEST.update(new_at=time.time(), new_src=src)
+        INGEST[f"{src}_new"] = INGEST.get(f"{src}_new", 0) + n
+    return n
+
+
+def merge_web(ch, posts):
+    """t.me/s: сторінка авторитетна для свого діапазону id (видалені пости зникають); новіші за неї
+    пости, що вже прийшли через MTProto, лишаються (сторінка t.me інколи відстає на кілька секунд)."""
+    with lock:
+        c = channels.setdefault(ch, {"posts": [], "at": 0, "err": None, "last_req": time.time()})
+        _seen_new(c, posts, "web")
+        top = max((p["id"] for p in posts), default=-1)
+        keep = [p for p in c["posts"] if p.get("id", -1) > top]
+        c["posts"] = sorted(list(posts) + keep, key=lambda p: p["id"])[-MAX_POSTS:]
+        c.update(at=time.time(), err=None)
+
+
+def merge_mt(ch, posts):
+    """MTProto: додає/замінює (редагування) пости за id. Повертає кількість нових."""
+    with lock:
+        c = channels.setdefault(ch, {"posts": [], "at": 0, "err": None, "last_req": time.time()})
+        n = _seen_new(c, posts, "mt")
+        by = {p["id"]: p for p in c["posts"]}
+        for p in posts:
+            by[p["id"]] = p
+        c["posts"] = sorted(by.values(), key=lambda p: p["id"])[-MAX_POSTS:]
+        return n
+
+
 def get_posts(ch):
     with lock:
         c = channels.setdefault(ch, {"posts": [], "at": 0, "err": None, "last_req": 0})

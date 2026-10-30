@@ -31,6 +31,9 @@ if rc:
 new = out.strip().splitlines()[-1]
 if new == old:
     print("server already at", new)
+# службове (сторож-таймер, залежності venv) — ідемпотентно; збій не блокує розгортання, але друкується
+rc_ops, out_ops = run("bash /opt/cyd-alert/deploy/install_ops.sh 2>&1 | tail -5")
+print(out_ops.strip() or f"install_ops rc={rc_ops}")
 rc, out = run(f"systemctl restart cyd-alert && {HC}")
 print(out.strip())
 if rc == 0:

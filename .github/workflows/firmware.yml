@@ -1,4 +1,6 @@
-# Збірка прошивки (PlatformIO, обидві плати) і публікація OTA-релізу v<FW_VERSION>.
+# Збірка прошивки (PlatformIO, обидві плати) і публікація OTA-релізу v<FW_VERSION> у ТЕСТОВИЙ (бета) канал:
+# реліз створюється як prerelease (не «latest») + version.json копіюється в реліз «beta». Бета-пристрої
+# (Налаштування → «Тестові оновлення») ставлять його одразу; стабільні — лише після витримки (fw-promote.yml, 24 год).
 # Реліз створюється, лише якщо такого тегу ще немає: щоб пристрої оновились — підвищте FW_VERSION у include/version.h.
 # Асети: firmware-<env>.bin (OTA), cyd-full-<env>.bin (кабелем з 0x0), version.json (маніфест для ESP).
 name: firmware
@@ -60,6 +62,12 @@ jobs:
             echo "::notice::v$VER вже опубліковано — щоб пристрої оновились, підвищте FW_VERSION у include/version.h"
             exit 0
           fi
-          gh release create "v$VER" dist/* --target "$GITHUB_SHA" --latest \
+          gh release create "v$VER" dist/* --target "$GITHUB_SHA" --prerelease \
             --title "CYD Alert v$VER" \
-            --notes "Прошивка v$VER. Пристрої з увімкненим «Автооновлення» встановлять її самі (перевірка раз на 6 год, не під час загрози). Кабелем: esptool write_flash 0x0 cyd-full-<плата>.bin"
+            --notes "Прошивка v$VER — БЕТА. Пристрої з «Тестові оновлення» встановлять її одразу; решта — після 24 год витримки (workflow fw-promote). Щоб зупинити просування в стабільний канал — допишіть HOLD у нотатки цього релізу. Кабелем: esptool write_flash 0x0 cyd-full-<плата>.bin"
+          if ! gh release view beta >/dev/null 2>&1; then
+            gh release create beta --target "$GITHUB_SHA" --prerelease --title "Beta channel (OTA manifest)" \
+              --notes "Службовий реліз: version.json тестового каналу OTA. Не видаляти."
+          fi
+          gh release upload beta dist/version.json --clobber
+          echo "::notice::v$VER опубліковано в бета-канал; стабільний — після витримки (fw-promote.yml)"

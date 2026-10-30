@@ -16,4 +16,7 @@ extern OtaStatus g_ota;
 int  otaCompare(const char* a, const char* b);   // семвер: <0, 0, >0
 void otaTick();            // викликається з мережевої задачі (core 0)
 void otaRequestCheck();    // кнопка «Перевірити оновлення» — перевірити і встановити, якщо є нова
-void otaMarkValid();       // на старті
+void otaBootCheck();       // на старті: стан слота (PENDING_VERIFY?), чи був відкат
+void otaValidTick();       // з loop(): підтвердити прошивку після успішного старту (або відкотити)
+bool otaPending();         // прошивка ще не підтверджена
+void otaMarkValid();       // підтвердити вручну

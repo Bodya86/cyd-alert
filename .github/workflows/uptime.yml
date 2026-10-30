@@ -1,0 +1,75 @@
+# Зовнішня перевірка сервера (на випадок, якщо впав увесь хост — тоді внутрішній cyd-watchdog мовчить).
+# Раз на 5 хв (GitHub може затримувати cron на 5–15 хв): /api/health ззовні; 2 спроби з паузою 60 с.
+# Сповіщення в Telegram (секрет TG_BOT_TOKEN; чат — секрет WD_CHAT_ID або 6554910913) лише при зміні стану
+# (впав / відновився); стан між запусками — у actions/cache. Ручний запуск: Actions → uptime → Run workflow.
+name: uptime
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HEALTH_URL: https://178.105.247.133.sslip.io/api/health
+      HEALTH_URL2: http://178.105.247.133/api/health
+    steps:
+      - name: Restore previous state
+        uses: actions/cache/restore@v4
+        with:
+          path: .uptime
+          key: uptime-${{ github.run_id }}
+          restore-keys: uptime-
+      - name: Check
+        id: chk
+        run: |
+          mkdir -p .uptime
+          prev=$(cat .uptime/state 2>/dev/null || echo up)
+          check() {
+            for u in "$HEALTH_URL" "$HEALTH_URL2"; do
+              j=$(curl -fsS -m 15 "$u" 2>/dev/null) || continue
+              echo "$j" | python3 -c '
+          import json,sys
+          h=json.load(sys.stdin)
+          bad=[]
+          if not h.get("ok"): bad.append("рушій не оновлюється (iter_age %ss)" % h.get("iter_age_s"))
+          a=h.get("tg_ok_age_s")
+          if h.get("uptime_s",0)>180 and (a is None or a>180): bad.append("пости Telegram не надходять (%s с)" % a)
+          print("; ".join(bad)); sys.exit(1 if bad else 0)' > .uptime/why && return 0
+              cat .uptime/why > .uptime/why2; return 1
+            done
+            echo "сервер недоступний ззовні (HTTP/HTTPS)" > .uptime/why2; return 1
+          }
+          if check || { sleep 60; check; }; then cur=up; else cur=down; fi
+          echo "$cur" > .uptime/state
+          echo "prev=$prev cur=$cur"
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"; echo "cur=$cur" >> "$GITHUB_OUTPUT"
+          echo "why=$(cat .uptime/why2 2>/dev/null | head -c 300)" >> "$GITHUB_OUTPUT"
+      - name: Notify Telegram
+        if: steps.chk.outputs.prev != steps.chk.outputs.cur
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          CHAT: ${{ secrets.WD_CHAT_ID || '6554910913' }}
+          CUR: ${{ steps.chk.outputs.cur }}
+          WHY: ${{ steps.chk.outputs.why }}
+        run: |
+          [ -n "$TG_BOT_TOKEN" ] || { echo "::warning::немає секрету TG_BOT_TOKEN"; exit 0; }
+          if [ "$CUR" = down ]; then MSG="🔴 CYD Alert (зовнішня перевірка GitHub): $WHY"; else MSG="✅ CYD Alert (зовнішня перевірка GitHub): сервер знову доступний"; fi
+          curl -fsS -m 20 -o /dev/null "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT}" --data-urlencode "text=${MSG}" || echo "::warning::не вдалось надіслати"
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .uptime
+          key: uptime-${{ github.run_id }}

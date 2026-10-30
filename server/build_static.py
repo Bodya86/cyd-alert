@@ -90,7 +90,7 @@ def fetch_all_channels(chans, workers=8):
     for ch, posts, err in res:
         c = srv.channels.setdefault(ch, {"posts": [], "at": 0, "err": None, "last_req": time.time()})
         if posts is not None:
-            c.update(posts=posts, at=time.time(), err=None)
+            srv.merge_web(ch, posts)
             srv.feed_tracker_posts(ch, posts)
             ok += 1
         else:

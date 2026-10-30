@@ -1067,16 +1067,23 @@ static void autoZoom(const AppState& s) {
 
 
 #define RED_PULSE_MS 500
+static lv_obj_t *s_staleTag = nullptr, *s_muteTag = nullptr;   // «немає зв'язку» / «тиша N хв» поверх мапи
 static lv_timer_t* s_pulseT = nullptr;
 static void mainDeleted(lv_event_t*) {
   s_main = nullptr; s_frame = nullptr; s_map = nullptr; s_marker = s_zoomBox = s_zoomTag = nullptr; s_btnZin = s_btnZout = s_btnZhome = nullptr;
   s_card = s_cardBar = nullptr;
+  s_staleTag = s_muteTag = nullptr;
   lv_anim_del(nullptr, zoomAnimCb);
   if (s_pulseT) { lv_timer_del(s_pulseT); s_pulseT = nullptr; }
 }
 static void settingsBtnCb(lv_event_t*) { showSettings(); }
 static void showDetail();
-static void cardCb(lv_event_t*) { notifySilence(); showDetail(); }   // дотик до картки — тиша до наступного підвищення
+static void cardCb(lv_event_t*) {   // дотик до картки — тиша 10 хв (підвищення до червоного все одно звучить)
+  notifyMute(10UL * 60UL * 1000UL);
+  stateLock(); Level L = g_state.level; stateUnlock();
+  showDetail();
+  if (L > LVL_GREEN) toast(LV_SYMBOL_MUTE " Звук вимкнено на 10 хв");
+}
 static void showOutage();
 static void outBoxCb(lv_event_t*) { showOutage(); }
 
@@ -1220,6 +1227,23 @@ static void showMain() {
   s_btnZout = mkZoomBtn(s_map, LV_SYMBOL_MINUS, -1, 2, MAP_H - 2 - 36);
   s_btnZhome = mkZoomBtn(s_map, LV_SYMBOL_HOME, 0, 2 + 36 + 3, MAP_H - 2 - 36);
   updateZoomBtns();
+  s_staleTag = mkLabel(s_map, "", &font_ua_12, 0xFFFFFF);   // «немає зв'язку» — по центру вгорі мапи
+  lv_obj_clear_flag(s_staleTag, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_color(s_staleTag, col(0xB00020), 0);
+  lv_obj_set_style_bg_opa(s_staleTag, LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_hor(s_staleTag, 5, 0);
+  lv_obj_set_style_pad_ver(s_staleTag, 1, 0);
+  lv_obj_set_style_radius(s_staleTag, 4, 0);
+  lv_obj_align(s_staleTag, LV_ALIGN_TOP_MID, 0, 2);
+  lv_obj_add_flag(s_staleTag, LV_OBJ_FLAG_HIDDEN);
+  s_muteTag = mkLabel(s_map, "", &font_ua_12, C_TEXT);      // тиша — правий верхній кут мапи
+  lv_obj_clear_flag(s_muteTag, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_color(s_muteTag, col(C_BG), 0);
+  lv_obj_set_style_bg_opa(s_muteTag, LV_OPA_70, 0);
+  lv_obj_set_style_pad_hor(s_muteTag, 3, 0);
+  lv_obj_set_style_radius(s_muteTag, 3, 0);
+  lv_obj_align(s_muteTag, LV_ALIGN_TOP_RIGHT, -2, 2);
+  lv_obj_add_flag(s_muteTag, LV_OBJ_FLAG_HIDDEN);
 
   // --- права панель ---
   lv_obj_t* rp = lv_obj_create(scr);
@@ -1636,6 +1660,14 @@ static void showSettings() {
     g_set.alertOnYellow = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
   }, LV_EVENT_VALUE_CHANGED, nullptr);
 
+  r = settingRow(list, "Тиша вночі 23–07 (крім червоного)");
+  sw = lv_switch_create(r);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (g_set.nightQuiet) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, [](lv_event_t* e) {
+    g_set.nightQuiet = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+
 #if BAT_ADC_PIN >= 0
   r = settingRow(list, "Заряд АКБ (GPIO" LV_STRINGIFY_PIN ")");
   sw = lv_switch_create(r);
@@ -1673,6 +1705,15 @@ static void showSettings() {
   if (g_set.autoUpdate) lv_obj_add_state(sw, LV_STATE_CHECKED);
   lv_obj_add_event_cb(sw, [](lv_event_t* e) {
     g_set.autoUpdate = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+  }, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  r = settingRow(list, "Тестові оновлення (бета)");
+  sw = lv_switch_create(r);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (g_set.otaBeta) lv_obj_add_state(sw, LV_STATE_CHECKED);
+  lv_obj_add_event_cb(sw, [](lv_event_t* e) {
+    g_set.otaBeta = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); settingsSave();
+    if (g_set.otaBeta) toast("Бета: нові версії раніше за всіх; збій старту — автоматичний відкат");
   }, LV_EVENT_VALUE_CHANGED, nullptr);
   String up = String("Перевірити оновлення · v") + FW_VERSION;
   if (g_ota.remote[0]) up += otaCompare(g_ota.remote, FW_VERSION) > 0 ? String(" → v") + g_ota.remote : String(" (остання)");
@@ -1955,6 +1996,47 @@ static void otaUi() {
   }
 }
 
+// Втрата зв'язку: Wi-Fi немає > 60 с або дані старші за STALE_MS → червона мітка на мапі + короткий сигнал
+// (раз при переході й нагадування раз на 30 хв; уночі в тихому режимі — без звуку). Рівень на екрані може бути застарілим.
+static void staleTick(uint32_t now) {
+  static uint32_t wifiLostAt = 0, beepAt = 0;
+  static bool was = false;
+  bool wifi = WiFi.status() == WL_CONNECTED;
+  if (wifi) wifiLostAt = 0; else if (!wifiLostAt) wifiLostAt = now | 1;
+  uint32_t age = netDataAgeMs();
+  bool noWifi = wifiLostAt && now - wifiLostAt > 60000;
+  bool stale = g_set.configured() && now > 120000 && (noWifi || age > STALE_MS);
+  if (stale && (!was || now - beepAt > 30UL * 60UL * 1000UL)) { notifyStaleBeep(); beepAt = now; }
+  if (stale != was) {
+    was = stale;
+    if (stale) Serial.printf("[ui] stale: wifi=%d age=%lu s\n", wifi, (unsigned long)(age == UINT32_MAX ? 0 : age / 1000));
+    else toast("Зв'язок відновлено", C_GREEN);
+  }
+  if (s_kind != SK_MAIN || !s_staleTag) return;
+  static char last[48] = "";
+  char b[48] = "";
+  if (stale) {
+    if (noWifi || !wifi) snprintf(b, sizeof b, LV_SYMBOL_WARNING " НЕМАЄ Wi-Fi");
+    else if (age == UINT32_MAX) snprintf(b, sizeof b, LV_SYMBOL_WARNING " НЕМАЄ ДАНИХ");
+    else snprintf(b, sizeof b, LV_SYMBOL_WARNING " НЕМАЄ ЗВ'ЯЗКУ · %lu хв", (unsigned long)(age / 60000));
+  }
+  if (strcmp(b, last) || (stale == lv_obj_has_flag(s_staleTag, LV_OBJ_FLAG_HIDDEN))) {
+    strlcpy(last, b, sizeof last);
+    lv_label_set_text(s_staleTag, b);
+    if (stale) lv_obj_clear_flag(s_staleTag, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s_staleTag, LV_OBJ_FLAG_HIDDEN);
+  }
+  uint32_t ml = notifyMutedLeftMs();
+  bool night = notifyNight();
+  static int lastMute = -2;
+  int mv = ml ? (int)((ml + 59999) / 60000) : night ? -1 : 0;
+  if (mv != lastMute) {
+    lastMute = mv;
+    if (mv > 0) lv_label_set_text_fmt(s_muteTag, LV_SYMBOL_MUTE " %d хв", mv);
+    else if (mv < 0) lv_label_set_text(s_muteTag, LV_SYMBOL_MUTE " ніч");
+    if (mv) lv_obj_clear_flag(s_muteTag, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s_muteTag, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 void uiLoop() {
   uint32_t now = millis();
   if (now - s_lastUi < 250) return;
@@ -1968,7 +2050,11 @@ void uiLoop() {
   time_t ts = g_state.tgTime;
   char text[TG_TEXT_MAX]; strlcpy(text, g_state.tgText, sizeof(text));
   char reason[120]; strlcpy(reason, g_state.tgReason, sizeof(reason));
+  // балістика / Кинджал — окремий звуковий малюнок (помаранчевий і червоний)
+  bool ball = g_state.pBallistic >= 20 || strstr(g_state.tgKind, "Баліст") || strstr(g_state.tgKind, "Кинджал") ||
+              strstr(g_state.thr, "Баліст") || strstr(g_state.thr, "Кинджал");
   stateUnlock();
+  staleTick(now);
 
   // тест кольору завершився — повертаємо реальний рівень
   if (s_previewUntil && (int32_t)(now - s_previewUntil) >= 0) {
@@ -1978,19 +2064,21 @@ void uiLoop() {
   }
   bool onInfo = s_kind == SK_MAIN || s_kind == SK_DETAIL || s_kind == SK_OUTAGE;
   if (!s_previewUntil && g_set.configured() && onInfo) {
-    if (L > s_lastLevel) {   // ескалація: звук/LED за рівнем, екран сам перефарбовується
-      notifyLevel(L, near);
+    static bool s_lastBall = false;
+    if (L > s_lastLevel || (ball && !s_lastBall && L >= LVL_ORANGE && L == s_lastLevel)) {   // ескалація (або стала балістикою)
+      notifyLevel(L, near, ball);
       if (L >= LVL_ORANGE && s_kind != SK_MAIN) showMain();   // з деталей/графіка — назад на кольоровий головний
       s_lastAlertTs = ts;
     } else if (L == LVL_RED && ts && ts != s_lastAlertTs) {  // новий пост про небезпеку поруч — сирена ще раз
-      notifyLevel(L, near);
+      notifyLevel(L, near, ball);
       s_lastAlertTs = ts;
     } else if (L < s_lastLevel) {
-      notifyLevel(L, near);
+      notifyLevel(L, near, ball);
       if (L == LVL_GREEN) toast("Відбій · чисто", C_GREEN);
       else toast((String("Рівень знижено: ") + levelName(L)).c_str(), levelColor(L));
     }
     s_lastLevel = L;
+    s_lastBall = ball;
   }
   if (s_kind == SK_OUTAGE) outageTick();
   if (s_kind == SK_MAIN) updateMain(false);

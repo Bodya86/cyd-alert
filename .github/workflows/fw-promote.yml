@@ -1,0 +1,66 @@
+# Просування прошивки з бета-каналу в стабільний (releases/latest), коли вона «відлежалась» SOAK_HOURS.
+# Береться найновіший prerelease v*, старший за SOAK_HOURS, без «HOLD» у нотатках і новіший за поточний latest.
+# Вручну (workflow_dispatch): можна вказати версію й/або force=true (без очікування витримки).
+name: fw-promote
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версія (напр. 1.3.13); порожньо — автоматичний вибір"
+        required: false
+        default: ""
+      force:
+        description: "Не чекати витримки"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firmware
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOAK_HOURS: "24"
+      WANT: ${{ github.event.inputs.version }}
+      FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - name: Pick release
+        id: pick
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=50" > rel.json
+          python3 - <<'PY'
+          import json, os, datetime as dt
+          rel = json.load(open("rel.json"))
+          v = lambda t: tuple(int(x) for x in t.lstrip("v").split(".") if x.isdigit())
+          now = dt.datetime.now(dt.timezone.utc)
+          soak = float(os.environ["SOAK_HOURS"]); force = os.environ.get("FORCE") == "true"
+          want = (os.environ.get("WANT") or "").strip().lstrip("v")
+          stable = [r for r in rel if r["tag_name"].startswith("v") and not r["prerelease"] and not r["draft"]]
+          cur = max((v(r["tag_name"]) for r in stable), default=())
+          pick = None
+          for r in sorted((r for r in rel if r["tag_name"].startswith("v") and r["prerelease"] and not r["draft"]),
+                          key=lambda r: v(r["tag_name"]), reverse=True):
+              if want and r["tag_name"] != "v" + want: continue
+              if v(r["tag_name"]) <= cur: continue
+              age = (now - dt.datetime.fromisoformat(r["published_at"].replace("Z", "+00:00"))).total_seconds() / 3600
+              if "HOLD" in (r.get("body") or ""): print(f"::notice::{r['tag_name']} HOLD — пропускаю"); continue
+              if age < soak and not force: print(f"::notice::{r['tag_name']} витримка {age:.1f}/{soak:.0f} год"); continue
+              pick = r["tag_name"]; break
+          print(f"pick: {pick or '-'} (stable {'.'.join(map(str, cur)) or '-'})")
+          open(os.environ["GITHUB_OUTPUT"], "a").write(f"tag={pick or ''}\n")
+          PY
+      - name: Promote
+        if: steps.pick.outputs.tag != ''
+        run: |
+          gh release edit "${{ steps.pick.outputs.tag }}" -R "$GITHUB_REPOSITORY" --prerelease=false --latest
+          echo "::notice::${{ steps.pick.outputs.tag }} → стабільний канал (releases/latest)"

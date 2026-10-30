@@ -1,5 +1,11 @@
-// OTA: перевірка релізу GitHub (version.json) раз на 6 год і на старті; завантаження HTTPS у вільний слот,
-// перевірка розміру та MD5 (Update.h), перезапуск. Ніколи не оновлюється під час помаранчевого/червоного рівня.
+// OTA: перевірка релізу GitHub (version.json) раз на 6 год (бета — раз на 2 год) і на старті; завантаження HTTPS
+// у вільний слот, перевірка розміру та MD5 (Update.h), перезапуск. Ніколи не оновлюється під час помаранчевого/червоного.
+// Канали: стабільний — releases/latest (лише після «витримки» на беті, workflow fw-promote); бета — релізний тег
+// «beta» (кожна нова збірка одразу). Бета-пристрій перевіряє обидва маніфести й бере новішу версію.
+// Відкат при старті: bootloader з CONFIG_APP_ROLLBACK_ENABLE; нова прошивка стартує як PENDING_VERIFY і позначається
+// робочою лише після успішного старту (UI працює ≥60 с і отримано дані з мережі). Скидання/паніка/зависання до того —
+// bootloader повертає попередню версію. Wi-Fi є, а даних 15 хв немає — відкат вручну (mark invalid). Версія, що двічі
+// не стартувала, автоматично більше не встановлюється (вручну — можна).
 #include "app.h"
 #include "ota.h"
 #include "version.h"
@@ -9,6 +15,10 @@
 #include <ArduinoJson.h>
 #include <Update.h>
 #include <esp_ota_ops.h>
+#include <Preferences.h>
+
+// Arduino-ядро за замовчуванням одразу позначає нову прошивку робочою (initArduino); беремо це на себе.
+extern "C" bool verifyRollbackLater() { return true; }
 
 OtaStatus g_ota;
 static volatile bool s_req = false;
@@ -26,9 +36,62 @@ int otaCompare(const char* a, const char* b) {
 
 void otaRequestCheck() { g_ota.manual = true; s_req = true; }
 
-void otaMarkValid() {
-  esp_ota_mark_app_valid_cancel_rollback();   // якщо bootloader з rollback — нова прошивка стартувала успішно
+static bool s_pending = false;      // ця прошивка ще не підтверджена (PENDING_VERIFY)
+static bool s_wifiSeen = false;
+static char s_bad[16] = "";        // версія, що не стартувала (з NVS)
+static uint8_t s_badN = 0;
+
+void otaBootCheck() {
+  const esp_partition_t* run = esp_ota_get_running_partition();
+  esp_ota_img_states_t st;
+  s_pending = run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY;
+  Preferences p;
+  p.begin("cydota", false);
+  String tried = p.getString("try", "");
+  strlcpy(s_bad, p.getString("bad", "").c_str(), sizeof(s_bad));
+  s_badN = p.getUChar("badn", 0);
+  if (tried.length() && tried != FW_VERSION) {     // встановлювали іншу — а стартувала ця: був відкат
+    if (tried == s_bad) s_badN++; else { strlcpy(s_bad, tried.c_str(), sizeof(s_bad)); s_badN = 1; }
+    p.putString("bad", s_bad); p.putUChar("badn", s_badN);
+    p.remove("try");
+    char b[96]; snprintf(b, sizeof(b), "Оновлення v%s не запустилось — повернуто v%s", s_bad, FW_VERSION); say(b);
+  }
+  p.end();
+  Serial.printf("[ota] boot v%s, %s%s\n", FW_VERSION, s_pending ? "PENDING_VERIFY (rollback armed)" : "valid",
+                s_bad[0] ? (String(", bad v") + s_bad + " x" + s_badN).c_str() : "");
+  if (!s_pending) {
+    esp_ota_mark_app_valid_cancel_rollback();       // звичайний старт (або bootloader без rollback) — нічого не чекаємо
+  }
 }
+
+static void confirm(const char* why) {
+  esp_ota_mark_app_valid_cancel_rollback();
+  s_pending = false;
+  Preferences p;
+  p.begin("cydota", false);
+  p.remove("try");
+  if (!strcmp(s_bad, FW_VERSION)) { p.remove("bad"); p.remove("badn"); s_bad[0] = 0; s_badN = 0; }
+  p.end();
+  Serial.printf("[ota] v%s confirmed valid (%s)\n", FW_VERSION, why);
+}
+
+void otaValidTick() {   // з loop() (core 1) — сам факт виклику означає, що UI живий
+  if (!s_pending) return;
+  uint32_t up = millis();
+  if (WiFi.status() == WL_CONNECTED) s_wifiSeen = true;
+  if (up < 60000) return;
+  if (!g_set.configured() || !g_set.ssid.length()) { confirm("not configured"); return; }
+  if (netDataAgeMs() < 120000) { confirm("UI + data ok"); return; }
+  if (!s_wifiSeen && up > 10UL * 60UL * 1000UL) { confirm("no Wi-Fi to judge, UI ok 10 min"); return; }
+  if (s_wifiSeen && up > 15UL * 60UL * 1000UL) {   // мережа є, а даних немає — нова версія, схоже, зламана
+    Serial.println("[ota] no data 15 min with Wi-Fi -> rollback");
+    esp_ota_mark_app_invalid_rollback_and_reboot();
+    confirm("rollback impossible");   // сюди потрапляємо, лише якщо відкат неможливий
+  }
+}
+
+bool otaPending() { return s_pending; }
+void otaMarkValid() { confirm("manual"); }
 
 static bool begin(HTTPClient& http, WiFiClientSecure& sec, const String& url) {
   sec.setInsecure();
@@ -92,6 +155,7 @@ static void install(const String& url, int size, const String& md5) {
     char b[96]; snprintf(b, sizeof(b), "Оновлення відхилено: %s", Update.errorString());
     say(b); g_ota.state = OTA_FAILED; return;
   }
+  { Preferences p; p.begin("cydota", false); p.putString("try", g_ota.remote); p.end(); }
   say("Оновлено — перезапуск");
   g_ota.state = OTA_REBOOTING;
   vTaskDelay(pdMS_TO_TICKS(2500));
@@ -110,16 +174,25 @@ void otaTick() {
     return;
   }
   g_ota.state = OTA_CHECKING;
-  Serial.printf("[ota] checking %s (local v%s, %s)%s\n", OTA_MANIFEST_URL, FW_VERSION, FW_ENV, manual ? " [manual]" : "");
-  WiFiClientSecure sec;
-  HTTPClient http;
+  // бета: спершу тестовий маніфест, потім стабільний — беремо новішу версію
+  const char* urls[2] = {g_set.otaBeta ? OTA_BETA_MANIFEST_URL : OTA_MANIFEST_URL, g_set.otaBeta ? OTA_MANIFEST_URL : nullptr};
   JsonDocument doc;
   bool ok = false;
-  if (begin(http, sec, OTA_MANIFEST_URL)) {
-    int code = http.GET();
-    if (code == 200) ok = !deserializeJson(doc, http.getStream());
-    else Serial.printf("[ota] manifest HTTP %d\n", code);
-    http.end();
+  for (const char* murl : urls) {
+    if (!murl) continue;
+    Serial.printf("[ota] checking %s (local v%s, %s)%s\n", murl, FW_VERSION, FW_ENV, manual ? " [manual]" : "");
+    WiFiClientSecure sec;
+    HTTPClient http;
+    JsonDocument d;
+    bool got = false;
+    if (begin(http, sec, murl)) {
+      int code = http.GET();
+      if (code == 200) got = !deserializeJson(d, http.getStream());
+      else Serial.printf("[ota] manifest HTTP %d\n", code);
+      http.end();
+    }
+    if (!got) continue;
+    if (!ok || otaCompare(d["version"] | "0", doc["version"] | "0") > 0) { doc = d; ok = true; }
   }
   if (!ok) {
     Serial.println("[ota] check failed: manifest not loaded, retry in 10 min");
@@ -129,7 +202,7 @@ void otaTick() {
     g_ota.manual = false;
     return;
   }
-  s_next = millis() + OTA_CHECK_MS;
+  s_next = millis() + (g_set.otaBeta ? OTA_BETA_CHECK_MS : OTA_CHECK_MS);
   const char* ver = doc["version"] | "";
   strlcpy(g_ota.remote, ver, sizeof(g_ota.remote));
   JsonObject e = doc["env"][FW_ENV];
@@ -145,6 +218,10 @@ void otaTick() {
     return;
   }
   if (!url.length() || size <= 0) { say("Маніфест без файлу для цієї плати"); g_ota.manual = false; return; }
+  if (!manual && s_badN >= 2 && !strcmp(ver, s_bad)) {   // двічі не стартувала — лише вручну
+    Serial.printf("[ota] v%s failed to boot %u times -> auto-install skipped (manual check still installs)\n", ver, s_badN);
+    return;
+  }
   if (alertActive()) { s_next = millis() + OTA_RETRY_MS; g_ota.manual = false; Serial.println("[ota] install skipped: threat level rose to orange/red, retry in 10 min"); return; }
   char b[96]; snprintf(b, sizeof(b), "Завантажую v%s…", ver); say(b);
   install(url, size, md5);

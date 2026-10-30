@@ -15,6 +15,9 @@ static volatile bool s_force = false, s_outForce = true;
 static String s_lmActive, s_lmIot;             // Last-Modified окремо для кожного ендпоінта
 static TgPost s_posts[TG_MAX_POSTS];
 static uint32_t s_srvAt = 0;  // останній успішний запит до сервера
+static volatile uint32_t s_dataAt = 0;   // останнє успішне отримання будь-яких даних (тривоги / сервер / t.me)
+static inline void markData() { s_dataAt = millis(); if (!s_dataAt) s_dataAt = 1; }
+uint32_t netDataAgeMs() { uint32_t d = s_dataAt; return d ? millis() - d : UINT32_MAX; }
 
 void netForceRefresh() { s_force = true; s_outForce = true; }
 void netOutageRefresh() { s_outForce = true; }
@@ -83,6 +86,7 @@ static void publishAlerts(const char* obl, const char* regions, bool fine, const
   else regionsFromOblasts(g_state);
   g_state.alertsOk = true;
   g_state.alertsAt = millis();
+  markData();
   g_state.alertsSrc = src;
   g_state.level = computeFinalLevel(g_state);
   g_state.version++;
@@ -141,7 +145,7 @@ static int fetchAlertsActive() {
   JsonDocument doc;
   int code = 0;
   bool ok = httpJson("https://api.alerts.in.ua/v1/alerts/active.json", doc, filter, g_set.token.c_str(), &code, &s_lmActive);
-  if (code == 304) { stateLock(); g_state.alertsAt = millis(); stateUnlock(); return 1; }
+  if (code == 304) { markData(); stateLock(); g_state.alertsAt = millis(); stateUnlock(); return 1; }
   if (!ok) { Serial.printf("[alerts.in.ua active] HTTP %d\n", code); s_lmActive = ""; return 0; }
 
   static uint8_t lvl[MAP_REGION_COUNT];
@@ -192,7 +196,7 @@ static int fetchAlertsActive() {
 static bool fetchAlertsIot() {
   String body; int code = 0;
   bool ok = httpGet("https://api.alerts.in.ua/v2/iot/active_air_raid_alerts_by_oblast.json", body, g_set.token.c_str(), &code, &s_lmIot);
-  if (code == 304) { stateLock(); g_state.alertsAt = millis(); stateUnlock(); return true; }
+  if (code == 304) { markData(); stateLock(); g_state.alertsAt = millis(); stateUnlock(); return true; }
   if (!ok) { Serial.printf("[alerts.in.ua iot] HTTP %d\n", code); s_lmIot = ""; return false; }
   int q = body.indexOf('"');
   if (q < 0 || (int)body.length() < q + 1 + OBLAST_COUNT) return false;
@@ -327,6 +331,7 @@ static bool applyStatic(JsonDocument& doc, bool& gotOblasts) {
   g_state.version++;
   stateUnlock();
   s_staticAt = millis();
+  markData();
   tgAggregate();
   Serial.printf("[static] age %ld s, targets %d\n", age, g_state.ntgt);
   return true;
@@ -424,7 +429,7 @@ static bool fetchServer(bool& gotOblasts) {
     int r = ghDataGet(path, body);
     if (r == 304) {   // не змінилось. Але якщо live.yml зупинився, файл «застигає»: старі цілі/рівень не тримаємо
       long age = staticAgeS();
-      if (age < 20 * 60) s_staticAt = millis();
+      if (age < 20 * 60) { s_staticAt = millis(); markData(); }
       if (age >= 20 * 60) Serial.printf("[static] дані застарілі: %ld хв\n", age / 60);
       tgAggregate();
       return true;
@@ -469,6 +474,7 @@ static bool fetchServer(bool& gotOblasts) {
   g_state.ntgt = 0;
   parseTargets(doc);
   s_srvAt = millis();
+  markData();
   g_state.level = computeFinalLevel(g_state);
   g_state.version++;
   stateUnlock();
@@ -599,6 +605,7 @@ static void tgAggregate() {
     if (agree >= 2) snprintf(g_state.tgReason, sizeof(g_state.tgReason), "%s; %d канали", b.reason, agree);
     else strlcpy(g_state.tgReason, b.reason, sizeof(g_state.tgReason));
   }
+  if (nOk > 0) markData();
   g_state.tgOk = nOk > 0 || s_cloud.ok;
   g_state.tgAt = millis();
   g_state.tgSrc = nOk ? "t.me" : "хмара";
@@ -832,6 +839,7 @@ static bool rtApply(const char* body, size_t len) {
   s_rtApplying = false;
   s_ghSrc = s_wsUp ? "сервер WS" : "сервер";
   s_rtAt = millis();
+  markData();
   return true;
 }
 static void wsSend(uint8_t op, const uint8_t* p, size_t n) {   // клієнт зобов'язаний маскувати кадри
@@ -875,7 +883,7 @@ static void wsPump() {                 // усі кадри, що вже при�
     else if (op == 0x8) { free(buf); wsClose(); return; }
     else if (op == 0x1 && !(h[0] & 0x80)) { Serial.println("[ws] fragmented"); free(buf); wsClose(); return; }
     else if (op == 0x1) { if (!rtApply(buf, n)) Serial.println("[ws] bad json"); }
-    if (op == 0x9 || op == 0xA) s_rtAt = millis();   // з'єднання живе → дані актуальні (сервер шле зміни сам)
+    if (op == 0x9 || op == 0xA) { s_rtAt = millis(); markData(); }   // з'єднання живе → дані актуальні (сервер шле зміни сам)
     free(buf);
   }
 }
@@ -903,7 +911,7 @@ static bool rtTick(bool force) {
     s_rtPollAt = millis();
     Req r;
     r.begin(String("http://" RT_SERVER_HOST "/static/") + rtStatePath(), nullptr, nullptr, nullptr, &s_rtEtag);
-    if (r.code == 304) s_rtAt = millis();
+    if (r.code == 304) { s_rtAt = millis(); markData(); }
     else if (r.code == 200) { s_rtEtag = r.etag; String b = r.http.getString(); rtApply(b.c_str(), b.length()); }
     else Serial.printf("[rt] http %d\n", r.code);
   }

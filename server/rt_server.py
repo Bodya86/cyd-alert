@@ -25,6 +25,7 @@ import analyzer as an         # noqa: E402
 import outage                 # noqa: E402
 import jaam_ws                # noqa: E402
 import tg_notify              # noqa: E402
+import tg_mtproto             # noqa: E402
 import accuracy               # noqa: E402
 import outcomes               # noqa: E402
 from live import NewsLoop     # noqa: E402
@@ -86,7 +87,16 @@ def _analyze_cached(text, city_id=None, district_id=None, remote=False, home=Non
 an.analyze_post = _analyze_cached
 
 STATS = {"started": time.time(), "it": 0, "it_at": 0.0, "it_ms": 0, "tg_fast_at": 0.0, "tg_all_at": 0.0,
-         "outage_at": 0.0, "alerts_src": None, "push": 0, "ws_clients": 0, "last_change": 0.0, "errors": 0}
+         "outage_at": 0.0, "alerts_src": None, "push": 0, "ws_clients": 0, "last_change": 0.0, "errors": 0,
+         "tg_ok_at": 0.0, "tg_ok_n": 0}
+WAKE = threading.Event()          # MTProto приніс новий пост → перерахунок одразу, не чекаючи ALERT_S
+
+
+def on_mt_posts(ch, posts):
+    if srv.merge_mt(ch, posts):
+        srv.feed_tracker_posts(ch, posts)
+        STATS["tg_ok_at"] = time.time()
+        WAKE.set()
 
 
 def seed(out):
@@ -251,6 +261,8 @@ class Engine(threading.Thread):
         fast |= {x.strip().lower() for x in os.environ.get("TG_FAST", "").split(",") if x.strip()}
         fast_list = [c for c in chans if c.lower() in fast]
         log(f"канали: {len(chans)} усього, швидкі ({TG_FAST_S:g} с): {', '.join(fast_list)}")
+        mt = tg_mtproto.MtprotoSource(chans, on_mt_posts, log)
+        mt.start()
         try:
             nl = NewsLoop(out)
         except Exception:  # noqa: BLE001
@@ -278,8 +290,12 @@ class Engine(threading.Thread):
                 except Exception as e:  # noqa: BLE001
                     srv.alerts["err"] = str(e)
                     log("alerts error:", e)
+                # канали з MTProto-push опитуємо t.me лише в загальному колі (TG_ALL_S) — як запасне джерело
+                fast_now = [c for c in fast_list if not tg_mtproto.covers(c)]
                 if t0 - last_all >= TG_ALL_S:
-                    bs.fetch_all_channels(chans)
+                    n_ok = bs.fetch_all_channels(chans)
+                    if n_ok:
+                        STATS["tg_ok_at"], STATS["tg_ok_n"] = time.time(), n_ok
                     last_all = last_fast = time.time()
                     STATS["tg_all_at"] = STATS["tg_fast_at"] = last_all
                     if nl:
@@ -287,8 +303,9 @@ class Engine(threading.Thread):
                             nl.tick()
                         except Exception:  # noqa: BLE001
                             traceback.print_exc()
-                elif fast_list and t0 - last_fast >= TG_FAST_S:
-                    bs.fetch_all_channels(fast_list, workers=4)
+                elif fast_now and t0 - last_fast >= TG_FAST_S:
+                    if bs.fetch_all_channels(fast_now, workers=4):
+                        STATS["tg_ok_at"] = time.time()
                     last_fast = STATS["tg_fast_at"] = time.time()
                 bs._written.update(n=0, skipped=0)
                 ns = input_sig()
@@ -332,7 +349,16 @@ class Engine(threading.Thread):
             STATS["it_ms"] = int((time.time() - t0) * 1000)
             if STATS["it"] % 300 == 1:
                 log(f"#{STATS['it']}: {STATS['alerts_src']}, {STATS['it_ms']} мс, цілей {len(srv.trk.tracks)}, ws {STATS['ws_clients']}")
-            time.sleep(max(0.3, ALERT_S - (time.time() - t0)))
+            WAKE.wait(max(0.3, ALERT_S - (time.time() - t0)))
+            WAKE.clear()
+
+
+def _last_post_age(now):
+    try:
+        ts = max((p.get("ts") or 0 for v in list(srv.channels.values()) for p in (v.get("posts") or [])[-1:]), default=0)
+    except Exception:  # noqa: BLE001
+        return None
+    return round(now - ts, 1) if ts else None
 
 
 # ------------------------------------------------------------------ HTTP / WebSocket
@@ -387,7 +413,14 @@ def make_app(out):
              "full_ms": STATS.get("full_ms"), "hot_ms": STATS.get("hot_ms"), "hot_why": STATS.get("hot_why"), "outage_age_s": round(now - STATS["outage_at"], 1), "ws_clients": STATS["ws_clients"],
              "pushes": STATS["push"], "last_change_age_s": round(now - STATS["last_change"], 1) if STATS["last_change"] else None,
              "notify": bool(STATS.get("notify")), "errors": STATS["errors"],
-             "channels_err": sorted(k for k, v in srv.channels.items() if v.get("err"))}
+             "channels_err": sorted(k for k, v in srv.channels.items() if v.get("err")),
+             "tg_ok_age_s": round(now - STATS["tg_ok_at"], 1) if STATS["tg_ok_at"] else None,
+             "tg_ok_n": STATS["tg_ok_n"], "last_post_age_s": _last_post_age(now),
+             "new_post_age_s": round(now - srv.INGEST["new_at"], 1) if srv.INGEST["new_at"] else None,
+             "new_post_src": srv.INGEST["new_src"],
+             "mtproto": {k: tg_mtproto.STATUS[k] for k in ("state", "why", "rx", "errors")} |
+                        {"joined": len(tg_mtproto.STATUS["joined"]),
+                         "last_rx_age_s": round(now - tg_mtproto.STATUS["last_rx"], 1) if tg_mtproto.STATUS["last_rx"] else None}}
         return web.json_response(h, headers={"Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"})
 
     async def api(req):

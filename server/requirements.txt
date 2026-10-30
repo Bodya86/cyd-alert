@@ -1,3 +1,4 @@
-# Сервер працює лише на стандартній бібліотеці Python 3.9+.
-# Для режиму TG_MODE=telethon:
+# Сервер працює на стандартній бібліотеці Python 3.9+ (+ aiohttp, numpy для rt_server.py).
+# MTProto (пряме читання Telegram акаунтом, server/tg_mtproto.py) і вхід QR-кодом (tools/tg_login.py):
 telethon>=1.36
+segno>=1.5

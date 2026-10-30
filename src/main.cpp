@@ -8,8 +8,8 @@
 void setup() {
   Serial.begin(115200);
   Serial.println("\n[CYD Alert] start v" FW_VERSION " (" FW_ENV ")");
-  otaMarkValid();
   settingsLoad();
+  otaBootCheck();   // нова прошивка після OTA — PENDING_VERIFY, підтверджується в otaValidTick()
   notifyInit();
   hwInit();
   WiFi.mode(WIFI_STA);
@@ -23,5 +23,6 @@ void loop() {
   lv_timer_handler();
   uiLoop();
   notifyLoop();
+  otaValidTick();
   delay(5);
 }
