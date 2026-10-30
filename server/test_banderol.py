@@ -34,6 +34,15 @@ class BanderolTrackerTest(unittest.TestCase):
             self.assertEqual(tk.parse_cues(s, tk.Tracker().gaz)["type"], want, s)
         self.assertEqual(tk.parse_cues("2 бандеролі на Кременчук", tk.Tracker().gaz)["count"], 2)
 
+    def test_far_prefix_match_other_oblast(self):
+        # 30.10 11:38: «в сторону с. Рокита, Великобагачанський район» (Полтавщина) геокодувалось у «Рокитне» (Київщина, ~210 км)
+        # → 4 «Бандеролі» біля Білої Церкви з невідомим курсом сумарно давали p_missile 10 % і червоний Кременчуку
+        poltava = an.CITIES["poltava"]
+        c = tk.parse_cues("мКР «Бандероль» продовжує рух в сторону с. Рокита, Великобагачанський район", tk.Tracker().gaz, poltava)
+        self.assertFalse([p for p in c["pos"] + c["heading"] if p["name"].startswith("рокит")])
+        c = tk.parse_cues("Шахед на Кременчука", tk.Tracker().gaz, poltava)          # своя область — як і раніше
+        self.assertEqual([p["name"] for p in c["heading"]], ["кременчук"])
+
     def test_speed_and_retype(self):
         self.assertLess(tk.TYPES["banderol"]["v"][0], 600)
         self.assertEqual(tk.TYPES["banderol"]["cls"], "missile")

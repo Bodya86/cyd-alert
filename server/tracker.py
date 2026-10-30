@@ -154,6 +154,7 @@ class Gazetteer:
 
 
 # ---------------- розбір підказок з тексту ----------------
+FAR_PREFIX_KM = 120   # обласний/міський канал: неточний збіг назви в іншій області далі за це — не та місцевість
 HEAD_RE = r"(курсом на|курс на|в бік|у бік|в сторону|в направлении|у напрямку|в напрямку|напрямок на|летить на|летит на|летять на|летят на|рухається на|движется на|заходить на|заходит на|на)"
 FROM_RE = r"(з боку|зі сторони|со стороны|з напрямку|с направления|від|из|з)"
 POS_RE = r"(над|в районі|в районе|біля|возле|поблизу|около|в|у|повз|мимо)"
@@ -237,6 +238,9 @@ def parse_cues(text, gaz, city=None, oblast=None):
         p = gaz.find(w, nxt, oblast)
         if not p or p["name"] in seen:
             continue
+        if city and p["name"] != w.strip("'- ") and p.get("oblast", -1) not in (-1, city.get("oblast")) and \
+                math.hypot((p["lon"] - city["lon"]) * 72.5, (p["lat"] - city["lat"]) * KM_LAT) > FAR_PREFIX_KM:
+            continue                     # неточний збіг основи далеко в чужій області: «Рокита» (Полтавщина) ≠ «Рокитне» (Київщина)
         seen.add(p["name"])
         before = " ".join(words[max(0, i - 3):i])
         if re.search(r"(^| )" + HEAD_RE + r"$", before):
