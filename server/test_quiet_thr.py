@@ -29,21 +29,24 @@ class QuietThr(unittest.TestCase):
 
 
     def test_threat_line(self):   # 30.10: «Балістика, місто» читалось як «летить на місто»
-        self.assertEqual(s.threat_line(an.RED, "oblast", "ballistic", "Кременчук"), "Балістика · в області, ризик для міста")
+        self.assertEqual(s.threat_line(an.RED, "oblast", "ballistic", "Кременчук"), "Балістика · загроза в області")
         self.assertEqual(s.threat_line(an.RED, "oblast", "ballistic", "Кременчук", True), "Балістика · загроза вашому району")
         self.assertEqual(s.threat_line(an.RED, "city", "missile", "Кременчук"), "Ракети · загроза вашому району")
-        self.assertEqual(s.zone_of(an.RED, "oblast"), "risk")
-        self.assertEqual(s.zone_of(an.RED, "raion"), "risk")
+        self.assertEqual(s.zone_of(an.RED, "oblast"), "obl")
+        self.assertEqual(s.zone_of(an.RED, "raion"), "raion")
         self.assertEqual(s.zone_of(an.RED, "raion", True), "district")
         self.assertEqual(s.zone_of(an.RED, "district"), "district")
         self.assertEqual(s.threat_line(an.ORANGE, "city", "drone", "Кременчук"), "Дрони · курс на Кременчук")
         self.assertEqual(s.threat_line(an.ORANGE, "city", "kab", "Полтава"), "КАБ · курс на Полтаву")
-        self.assertEqual(s.threat_line(an.ORANGE, "oblast", "ballistic", "Кременчук"), "Балістика · в області, ризик для міста")
-        self.assertEqual(s.threat_line(an.ORANGE, "raion", "kab", "Кременчук"), "КАБ · в області, ризик для міста")
+        self.assertEqual(s.threat_line(an.ORANGE, "oblast", "ballistic", "Кременчук"), "Балістика · загроза в області")
+        self.assertEqual(s.threat_line(an.ORANGE, "raion", "kab", "Кременчук"), "КАБ · загроза в районі")
         self.assertEqual(s.threat_line(an.YELLOW, "city", "missile", "Кременчук"), "Ракети · в області")
         self.assertEqual(s.threat_line(an.GREEN, "", "", "Кременчук"), "Загроз немає")
         self.assertEqual(s.zone_of(an.ORANGE, "city"), "course")
-        self.assertEqual(s.zone_of(an.ORANGE, "oblast"), "risk")
+        self.assertEqual(s.zone_of(an.ORANGE, "oblast"), "obl")
+        # «курс на місто» — лише з підтвердженим курсом (пост); P трекера ≥ порогу — лише «загроза в районі»
+        self.assertEqual(s.zone_of(an.ORANGE, "city", src="track"), "raion")
+        self.assertEqual(s.threat_line(an.ORANGE, "city", "drone", "Кременчук", src="track"), "Дрони · загроза в районі")
         for k in s.KIND_TXT:
             for lv, sc in ((an.RED, "district"), (an.ORANGE, "city"), (an.ORANGE, "oblast"), (an.YELLOW, "city")):
                 t = s.threat_line(lv, sc, k, "Кременчук")

@@ -120,9 +120,12 @@ KIND_SHORT = {"Дрони": "Дрони — Шахед/БпЛА", "drone": "Др
 # «летить / не летить» — за полем scope (куди прямує ціль: область / район / місто / ваш район)
 SCOPE_LINE = {"district": "🔴 Летить на ваш район", "city": "➡️ Летить у бік міста",
               "raion": "↗️ У бік району, не на місто", "oblast": "⬜ Не летить на місто (загроза в області)"}
-# поле zone сервера (що реально відомо): помаранчевий без курсу — не «летить на місто», а «ризик» (рішення 30.10)
-ZONE_LINE = {"district": "🔴 Загроза вашому району", "risk": "⚠️ В області, ризик для міста",
-             "oblast": "⬜ В області"}
+# поле zone сервера (що реально відомо): без підтвердженого курсу — не «летить на місто» і не «ризик для міста»,
+# а де саме загроза (рішення 30.10). "risk" — старий код (= в області)
+ZONE_LINE = {"district": "🔴 Загроза вашому району", "raion": "⚠️ Загроза в районі", "obl": "⚠️ Загроза в області",
+             "risk": "⚠️ Загроза в області", "oblast": "⬜ В області"}
+ZONE_HEAD = {"course": "КУРС НА МІСТО", "district": "ЗАГРОЗА В РАЙОНІ", "raion": "ЗАГРОЗА В РАЙОНІ", "obl": "ЗАГРОЗА В ОБЛАСТІ",
+             "risk": "ЗАГРОЗА В ОБЛАСТІ"}
 
 
 def _acc(name):
@@ -143,7 +146,7 @@ def _scope_line(st, level, place):
     # старий стан без zone
     sc = st.get("scope") or {3: "district", 2: "city"}.get(level)
     if level == 2 and sc not in ("city", "district"):
-        return ZONE_LINE["risk"]
+        return ZONE_LINE["raion" if sc == "raion" else "obl"]
     return SCOPE_LINE.get(sc)
 
 
@@ -310,8 +313,9 @@ def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
     # шапка
     bar = {2: (255, 140, 26), 3: (229, 72, 77)}.get(level, (46, 160, 67))
     dr.rectangle([0, 0, w, 44 * S], fill=bar)
-    orange = "КУРС НА МІСТО" if st.get("zone", "course") == "course" else "РИЗИК ДЛЯ МІСТА"
-    title = {2: orange, 3: "НЕБЕЗПЕКА"}.get(level, "ЧИСТО") + " · " + (cfg.get("label") or "")
+    z = st.get("zone") or ({3: "district", 2: "course"}.get(level) if st.get("scope") in ("city", "district") else "obl")
+    head = ZONE_HEAD.get(z) or "ЗАГРОЗА В ОБЛАСТІ"
+    title = (head if level >= 2 else "ЧИСТО") + " · " + (cfg.get("label") or "")
     dr.text((14 * S, 8 * S), title, font=font(22, True), fill=(11, 15, 20))
     img = img.resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()

@@ -109,26 +109,32 @@ def city_acc(name):
 THR_MAX = 36   # символів: довше — коротка назва типу («Дрони · курс на Кременчук»), щоб влізло в рядок картки
 
 
-def zone_of(final, scope, official=False):
-    """Що реально відомо (рішення 30.10, «Балістика, місто» читалось як «летить на місто»):
-    district — червоний; course — помаранчевий із курсом/близькістю до міста (пост або трекер);
-    risk — помаранчевий без курсу (ракети/КАБ/балістика в області); oblast — жовтий; "" — зелений."""
+def zone_of(final, scope, official=False, src="post"):
+    """Що реально відомо (рішення 30.10: «Ризик для міста»/«Балістика, місто» читались як «летить на місто»):
+    district — червоний із курсом на місто/район або офіційною тривогою у вашому районі;
+    course — помаранчевий лише з підтвердженим курсом на місто (пост про місто/район, src="post");
+    raion — «загроза в районі» (трекер/пост про район, без підтвердженого курсу на місто);
+    obl — «загроза в області» (ракети/КАБ/балістика в області, без курсу); oblast — жовтий; "" — зелений."""
     if final >= an.RED:
-        # червоний без курсу на місто/район (балістика на область, ракети в області) — не «загроза вашому району»
-        # (30.10 16:31 хибне «Балістика · загроза вашому району» від scope=oblast); офіційна тривога у вашому районі — так
-        return "district" if (scope in ("city", "district") or official) else "risk"
+        if scope in ("city", "district") or official:
+            return "district"
+        return "raion" if scope == "raion" else "obl"
     if final == an.ORANGE:
-        return "course" if scope in ("city", "district") else "risk"
+        if scope in ("city", "district") and src == "post":
+            return "course"
+        return "raion" if scope in ("city", "district", "raion") else "obl"
     return "oblast" if final == an.YELLOW else ""
 
 
-def threat_line(final, scope, kind, city_name, official=False):
+ZONE_TAIL = {"district": "загроза вашому району", "raion": "загроза в районі", "obl": "загроза в області", "oblast": "в області"}
+
+
+def threat_line(final, scope, kind, city_name, official=False, src="post"):
     """Рядок 2 (помаранчевий/червоний, жовтий без «тихого» тексту): «<Тип> · <що відомо>»."""
-    z = zone_of(final, scope, official)
+    z = zone_of(final, scope, official, src)
     if not z:
         return "Загроз немає"
-    tail = {"district": "загроза вашому району", "course": "курс на " + city_acc(city_name),
-            "risk": "в області, ризик для міста", "oblast": "в області"}[z]
+    tail = "курс на " + city_acc(city_name) if z == "course" else ZONE_TAIL[z]
     full = KIND_TXT.get(kind, "Ціль") + " · " + tail
     return full if len(full) <= THR_MAX else QUIET_SHORT.get(kind, "Ціль") + " · " + tail
 
@@ -644,7 +650,7 @@ def state(q):
         if d.get("likely"):
             lt, lp = d["likely"]["name"], round(d["likely"]["p"] * 100)
             break
-    # тип загрози + що відомо (рядок 2 на екрані): «Дрони · курс на Кременчук», «Балістика · в області, ризик для міста»
+    # тип загрози + що відомо (рядок 2 на екрані): «Дрони · курс на Кременчук», «Балістика · загроза в області»
     kind = (ev.sub if ev.sub in KIND_TXT else ev.threat) if (lvl > an.GREEN and ev.threat) else ""
     if not kind and tg and final > an.GREEN:
         d0 = next((d for d in tg if d["cls"] != "recon"), tg[0])
@@ -660,9 +666,9 @@ def state(q):
         elif near and len(set(near)) == 1 and near[0] in KIND_TXT:
             kind = near[0]
     _cdef = an.CITIES.get(city) if city else None
-    thr = threat_line(final, scope, kind, (_cdef or {}).get("name", ""), official)
+    thr = threat_line(final, scope, kind, (_cdef or {}).get("name", ""), official, scope_src)
     thr = quiet_thr(final, scope, kind, tg, obl_alert) or thr
-    zone = zone_of(final, scope, official)
+    zone = zone_of(final, scope, official, scope_src)
     # новини про влучання — лише інформація: де б'ють останнім часом (рівень НЕ змінюють)
     nw = None
     ulat0, ulon0, _ = user_point(q)
@@ -720,7 +726,7 @@ def state(q):
         "scope_src": scope_src,
         "scope_p": {k: round(v * 100) for k, v in sp.items()},
         "thr": thr,
-        "zone": zone,          # district / course / risk / oblast / "" — куди реально (не) летить (для вебу й Telegram)
+        "zone": zone,          # district / course / raion / obl / oblast / "" — куди реально (не) летить (для вебу й Telegram)
         "news": nw,
         "hm": hm,
         "ballistic": round(max([d["p"][5] for d in balli], default=0) * 100),
@@ -769,7 +775,7 @@ c.onchange=()=>{fd();go()};d.onchange=go;fd();
 const t=s=>s?new Date(s*1000).toLocaleTimeString('uk'):'—';
 async function go(){const q=`city=${c.value}&district=${d.value}`;
  const s=await (await fetch('/api/state?'+q)).json();
- document.body.className='L'+s.final;document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Загроза в області',orange:(s.zone&&s.zone!='course')?'🟠 Ризик для міста':'🟠 Курс на ваше місто',red:'🔴 Небезпека поруч'}[s.final]}</b>${s.thr&&s.final!='green'?'<br>'+s.thr:''} (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel}${s.agree>1?' · підтверджують '+s.agree+' канали':''} · ${(s.channels||[]).length} каналів · тривоги: ${s.oblasts_src||'—'}</span></div>`;
+ document.body.className='L'+s.final;document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${{green:'🟢 Чисто',yellow:'🟡 Загроза в області',orange:s.zone=='course'?'🟠 Курс на ваше місто':s.zone=='raion'?'🟠 Загроза в районі':'🟠 Загроза в області',red:'🔴 Небезпека поруч'}[s.final]}</b>${s.thr&&s.final!='green'?'<br>'+s.thr:''} (Telegram: ${s.level}${s.kind?' / '+s.kind:''}, бал ${s.score}${s.near?', поруч':''}${s.official?', офіційна тривога: '+s.official_level+(s.official_partial?' частково':'')+' · '+(s.region_name||''):''})<br>${s.reason||''}<p>${s.text||'—'}</p><span class=mut>${t(s.ts)} · @${s.channel}${s.agree>1?' · підтверджують '+s.agree+' канали':''} · ${(s.channels||[]).length} каналів · тривоги: ${s.oblasts_src||'—'}</span></div>`;
  const g=await (await fetch('/api/targets?'+q)).json();const S=g.summary;
  document.getElementById('tg').innerHTML=`<div class=card style="border-color:#58a6ff"><b>🎯 Цілі (${g.targets.length})</b> · P(≤${g.user?g.user.R:15} км, 30 хв): дрони ${Math.round(S.p_drone[30]*100)}%, ракети ${Math.round(S.p_missile[30]*100)}%${S.eta_min!=null?' · ETA '+Math.round(S.eta_min)+' хв':''}<br>`+
   g.targets.map(x=>`<span class=mut>${x.label}${x.count>1?' ×'+x.count:''} · ${x.dist_km!=null?x.dist_km+' км':'—'} · курс ${x.heading!=null?x.heading+'°':'—'} (${Math.round(x.heading_conf*100)}%) · ${x.speed} км/год · P5/15/30 ${[5,15,30].map(T=>Math.round(x.p[T]*100)).join('/')}% · ETA ${x.eta_min??'—'} · ${x.src.join(',')}</span>`).join('<br>')+`<div class=mut>${g.attribution}</div></div>`;

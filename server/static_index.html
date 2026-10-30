@@ -21,10 +21,10 @@ async function go(){const q=`city=${c.value}&district=${d.value}`;
  const s=await J(`api/state/${c.value}${d.value?'/'+d.value:''}.json`);
  document.getElementById('gen').textContent='оновлено '+t(s.generated);
  const SC={district:'🔴 Летить на ваш район',city:'➡️ Летить у бік міста',raion:'↗️ У бік району, не на місто',oblast:'⬜ Не летить на місто (загроза в області)'};
- const zn=s.zone||(s.final=='orange'?(['city','district'].includes(s.scope)?'course':'risk'):'');
- const HD={green:'🟢 Чисто',yellow:'🟡 Увага · ціль в області',orange:zn=='course'?'🟠 Курс на ваше місто':'🟠 Ризик для міста',red:'🔴 Небезпека поруч'}[s.final];
+ const zn=s.zone||(s.final=='orange'?(['city','district'].includes(s.scope)?'course':'obl'):'');
+ const HD={green:'🟢 Чисто',yellow:'🟡 Увага · ціль в області',orange:zn=='course'?'🟠 Курс на ваше місто':zn=='raion'?'🟠 Загроза в районі':'🟠 Загроза в області',red:'🔴 Небезпека поруч'}[s.final];
  const qt=s.thr&&s.thr.includes(' · ');const thr=s.final=='green'?(qt?s.thr:''):(qt?s.thr:((s.thr&&s.thr!='Загроз немає')?s.thr.split(',')[0]:(s.kind||'Ціль')));
- const sc=(s.final=='green'||qt)?'':(zn=='risk'?'⚠️ В області, ризик для міста':(SC[s.scope||{red:'district',orange:'city'}[s.final]]||''));
+ const sc=(s.final=='green'||qt)?'':(zn=='raion'?'⚠️ Загроза в районі':(zn=='obl'||zn=='risk')?'⚠️ Загроза в області':(SC[s.scope||{red:'district',orange:'city'}[s.final]]||''));
  document.body.className='L'+s.final;document.getElementById('st').innerHTML=`<div class="card ${s.final}"><b>${HD}</b>`+[thr,sc,s.final!='green'&&s.final!='red'&&s.p_near!=null?`Проліт поруч за 30 хв: ${s.p_near}%${s.p_near&&s.eta>=0?' (~'+s.eta+' хв)':''}`:'',s.lt&&s.lp?`Ймовірна ціль: ${s.lt} — ${s.lp}%`:''].filter(Boolean).map(x=>'<br>'+x).join('')+`</div>`;
  const g=await J(`api/targets/${c.value}.json`);const S=g.summary;
  document.getElementById('tg').innerHTML=`<div class=card style="border-color:#58a6ff"><b>🎯 Цілі (${g.targets.length})</b> · P(≤${g.user?g.user.R:15} км, 30 хв): дрони ${Math.round(S.p_drone[30]*100)}%, ракети ${Math.round(S.p_missile[30]*100)}%${S.eta_min!=null?' · ETA '+Math.round(S.eta_min)+' хв':''}<br>`+

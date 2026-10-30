@@ -149,7 +149,8 @@ class OutcomeLog:
                 recs.append(dict(k="sum", t=int(now), p_any=g("p_any"), p_drone=g("p_drone"), p_missile=g("p_missile"),
                                  p_any15=g15("p_any"), p_drone15=g15("p_drone"), raw=raw or None,
                                  nd=sum(1 for d in tg if d.get("cls") == "drone"), nm=sum(1 for d in tg if d.get("cls") == "missile"),
-                                 lvl=s.get("level"), alert=None if alert is None else int(alert), n=len(tg)))
+                                 lvl=s.get("level"), alert=None if alert is None else int(alert), n=len(tg),
+                                 d_any=s.get("d_any"), d_drone=s.get("d_drone")))
         recs += self._resolve(trk, alive, ulat, ulon, now)
         for i in [i for i in self.trails if i not in alive and not any(p["id"] == i for p in self.pending)]:
             del self.trails[i]

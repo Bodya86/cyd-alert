@@ -1116,7 +1116,7 @@ static void cardLines(const AppState& s, Level L, String ln[4]) {
   // з 1.3.15 сервер пише й помаранчевий/червоний через « · » («Дрони · курс на Кременчук») — на зеленому
   // відкидаємо рядки тривоги, лишаємо тільки «тихі» (в області / у районі / тривога в області)
   bool quiet = s.thr[0] && strstr(s.thr, " · ") && !strstr(s.thr, "курс на") && !strstr(s.thr, "вашому району") &&
-               !strstr(s.thr, "ризик для");
+               !strstr(s.thr, "ризик для") && !strstr(s.thr, "загроза в районі") && !strstr(s.thr, "загроза в області");
   if (L == LVL_GREEN) ln[1] = quiet ? String(s.thr) : String("Загроз немає");
   else if (s.thr[0] && strcmp(s.thr, "Загроз немає")) ln[1] = s.thr;
   else if (L == LVL_YELLOW) {
@@ -1128,9 +1128,9 @@ static void cardLines(const AppState& s, Level L, String ln[4]) {
     bool drone = !strcmp(s.tgKind, "Дрони") || !s.tgKind[0];
     ln[1] = drone ? String("Дрони") : String(s.tgKind);
     // червоний без курсу на місто/район (балістика на область) — не «загроза вашому району» (= server zone_of)
-    if (L == LVL_RED) ln[1] += (s.tgExplicit || s.offLevel > LVL_GREEN) ? " · загроза вашому району" : " · в області, ризик для міста";
+    if (L == LVL_RED) ln[1] += (s.tgExplicit || s.offLevel > LVL_GREEN) ? " · загроза вашому району" : " · загроза в області";
     else if (drone) ln[1] += String(" · курс на ") + (c ? c->name : "місто");   // дрони дають помаранчевий лише за курсом на місто
-    else ln[1] += " · в області, ризик для міста";
+    else ln[1] += " · загроза в області";   // без курсу — лише факт (не «ризик для міста», 30.10)
   }
   int pn = s.pBallistic > s.pNear ? s.pBallistic : s.pNear;
   // червона тривога: рядок ймовірності не показуємо (рішення користувача — цифра лише відволікає, треба в укриття)

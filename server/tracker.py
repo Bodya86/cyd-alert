@@ -61,6 +61,8 @@ EVENT_P = dict(raion=0.6, oblast=0.3, near=0.25, far=0.01)
 # налаштовані на «множення»; вмикати лише разом із перенастроюванням порогів.
 DEDUP_KM = 0.0
 DEDUP_DEG = 35.0
+OBS_SIGMA = 20.0         # км: сире положення з поста — ознака відстані для калібрування зведення
+OBS_MIN = 15.0           # хв: не старше
 DRONE_TYPES = {k for k, v in TYPES.items() if v["cls"] == "drone"}
 
 
@@ -91,6 +93,20 @@ def load_city_cal(path=None):
 
 
 CITY_CAL = load_city_cal()
+
+
+def load_city_levels(path=None):
+    """data/model_params.json → city_cal.levels {"orange": θ, "red": θ|null} — пороги на КАЛІБРОВАНИХ p_drone30 / p_drone15
+    (tools/fit_city_cal.py --dist --levels, підібрано на train). Немає ключа — старий поріг на сирих (0.15 / 0.5)."""
+    try:
+        cc = json.load(open(path or os.path.join(DATA, "model_params.json"), encoding="utf-8")).get("city_cal") or {}
+    except (OSError, ValueError):
+        return {}
+    lv = cc.get("levels") or {}
+    return {k: float(lv[k]) for k in ("orange", "red") if lv.get(k) is not None} if cc.get("enabled", True) else {}
+
+
+CITY_LEVELS = load_city_levels()
 SPLIT_DIGESTS = True     # дайджести з кількома цілями → окремі фрагменти (split_post)
 HEAD_ASSOC_KM = 150.0    # «курсом на X» без положення оновлює лише ціль, від якої X ≤ 150 км (0 — стара поведінка)
 HEAD_NEW_SIGMA = 30.0    # нова ціль біля X для «Область: … курсом на X» (0 — стара поведінка: зона каналу)
@@ -870,6 +886,16 @@ class Tracker:
                     tr.obs_region(lat, lon, rad, sigma=35.0, eps=0.5, inside=started)
 
     # --- результат ---
+    @staticmethod
+    def _obs_km(tr, ulat, ulon, now):
+        """км від користувача до ОСТАННЬОГО ПОВІДОМЛЕНОГО положення цілі (σ ≤ OBS_SIGMA, не старше OBS_MIN хв); інакше None.
+        Ознака калібрування CITY_CAL (аудит 30.10: відстань до свіжого сирого положення різнить краще за середнє фільтра)."""
+        lp = getattr(tr, "last_pos", None)
+        if not lp or lp[3] > OBS_SIGMA or now - lp[0] > OBS_MIN * 60 or now < lp[0] - 60:
+            return None
+        ux, uy = tr.proj.xy(ulat, ulon); px, py = tr.proj.xy(lp[1], lp[2])
+        return round(math.hypot(px - ux, py - uy), 1)
+
     def assess(self, ulat, ulon, now=None, R=15.0, user_region=None, user_oblast=None, neighbors=()):
         now = now or time.time()
         self._alive(now)
@@ -888,7 +914,7 @@ class Tracker:
                             count=tr.count, lat=round(lat, 4), lon=round(lon, 4), heading=round(math.degrees(hd)),
                             heading_conf=round(Rh, 2), speed=round(v), sd_km=round(sd, 1),
                             age_s=int(now - tr.last_obs), obs=tr.nobs, src=sorted(tr.src),
-                            trail=[[p[1], p[2]] for p in getattr(tr, "trail", [])], **f))
+                            trail=[[p[1], p[2]] for p in getattr(tr, "trail", [])], obs_km=self._obs_km(tr, ulat, ulon, now), **f))
         # балістика/КАБ «подією»: без траєкторії — апріорна ймовірність за збігом району/області.
         # Та сама подія з кількох каналів (репости) — одна: інакше threat_summary множить її як незалежні цілі.
         uniq = {}
@@ -969,18 +995,35 @@ def dedup_targets(targets, km=None, deg=None):
     return out
 
 
-def _platt(p, ab):
+def _platt(p, ab, d=None):
+    """[a, b]: σ(a·logit p + b); [a, c, b]: σ(a·logit p + c·ln d + b), d — км до найближчої цілі класу (2…300, немає — 300)."""
     p = min(0.999, max(0.001, p))
-    return 1 / (1 + math.exp(-(ab[0] * math.log(p / (1 - p)) + ab[1])))
+    z = ab[0] * math.log(p / (1 - p)) + ab[-1]
+    if len(ab) == 3:
+        z += ab[1] * math.log(min(300.0, max(2.0, d if d is not None else 300.0)))
+    return 1 / (1 + math.exp(-z))
 
 
-def threat_summary(targets, cal=None):
+def nearest_km(targets, cls=None):
+    """Відстань (км) до найближчого СВІЖОГО ПОВІДОМЛЕНОГО положення цілі класу (None — будь-якої, крім розвідників),
+    obs_km з assess; немає — None (калібрування бере 300 км)."""
+    ds = [d["obs_km"] for d in targets if d.get("obs_km") is not None
+          and ((d["cls"] != "recon") if cls is None else d["cls"] == cls)]
+    return round(min(ds), 1) if ds else None
+
+
+def threat_summary(targets, cal=None, levels=None):
     """Загальна ймовірність, що хоча б одна ціль пройде в радіусі R: 1 − Π(1 − p_i).
     Група з n цілей летить корельовано, тому замість 1−(1−p)^n беремо 1−(1−p)^√n.
     Сирі ймовірності переоцінюють (бектест: при 0.68 збувається ~19 %) → p_any/p_drone/p_missile калібруються
-    (CITY_CAL, Platt по горизонтах; немає цілей класу — 0). Рівень (level) — з сирих, як і раніше; сирі — у s["raw"]."""
-    cal = CITY_CAL if cal is None else cal
+    (CITY_CAL: Platt по горизонтах + ln відстані до свіжого положення цілі класу; немає цілей класу — 0).
+    Рівень: помаранчевий — калібрований p_drone30 ≥ CITY_LEVELS["orange"] (немає — сирий ≥ 0.15); червоний — сирі
+    p_drone15 ≥ 0.5 / p_missile30 ≥ 0.10 (на holdout калібровані для червоного не кращі, аудит 30.10); сирі — у s["raw"]."""
+    if cal is None:
+        cal, levels = CITY_CAL, (CITY_LEVELS if levels is None else levels)
+    levels = levels or {}
     targets = dedup_targets(targets)
+    dist = {"p_any": nearest_km(targets), "p_drone": nearest_km(targets, "drone"), "p_missile": nearest_km(targets, "missile")}
 
     def comb(cls, T):
         q = 1.0
@@ -1000,17 +1043,20 @@ def threat_summary(targets, cal=None):
         prev = 1.0
         for T in (30, 15, 5):                       # монотонно: p5 ≤ p15 ≤ p30
             if T in c:
-                prev = min(prev, round(_platt(raw[k][T], c[T]), 3))
+                prev = min(prev, round(_platt(raw[k][T], c[T], dist[k]), 3))
                 s[k][T] = prev
     s["raw"] = raw
+    s["d_any"], s["d_drone"] = dist["p_any"], dist["p_drone"]
     raw_s = raw
     etas = [d["eta_min"] for d in targets if d["eta_min"] is not None and d["p"][30] >= 0.1]
     s["eta_min"] = min(etas) if etas else None
     # рівні як в analyzer: 2 — помаранчевий (ціль, ймовірно, пройде в радіусі R від вас), 3 — червоний
+    # пороги: калібровані p_drone (з відстанню) і підібрані на train (аудит 30.10), або старі на сирих
     lvl = 0
-    if raw_s["p_drone"][30] >= 0.15:
+    if (s["p_drone"][30] >= levels["orange"]) if "orange" in levels else (raw_s["p_drone"][30] >= 0.15):
         lvl = 2
-    if raw_s["p_drone"][15] >= 0.5 or raw_s["p_missile"][30] >= 0.10:     # дрон майже напевно поруч / ракети
+    red_d = (s["p_drone"][15] >= levels["red"]) if "red" in levels else (raw_s["p_drone"][15] >= 0.5)
+    if red_d or raw_s["p_missile"][30] >= 0.10:     # дрон майже напевно поруч / ракети
         lvl = 3
     s["level"] = lvl
     return s

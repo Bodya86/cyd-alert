@@ -1,6 +1,6 @@
 """Аудит імовірнісної моделі (30.10): подвійний облік подій і дублікатів цілей, нормування p_zones,
 «мертві» після fold() слова в регулярках звітів/прогнозів."""
-import math, random, unittest
+import math, os, random, unittest
 import tracker as tk
 import analyzer as an
 
@@ -118,3 +118,65 @@ class FoldedRegexTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoRiskLabelTest(unittest.TestCase):
+    """30.10: «РИЗИК ДЛЯ МІСТА» вводило в оману (наче ціль летить на місто) — лише факти: загроза в районі / в області."""
+    def test_renderers(self):
+        import tg_notify as tn
+        root = os.path.dirname(os.path.abspath(__file__))
+        for f in ("tg_notify.py", "static_index.html", "server.py", "../src/ui.cpp"):
+            src = open(os.path.join(root, f), encoding="utf-8").read()
+            for bad in ("РИЗИК ДЛЯ", "'🟠 Ризик", "в області, ризик для міста"):
+                self.assertNotIn(bad, src, f)
+        self.assertEqual(tn.ZONE_HEAD["raion"], "ЗАГРОЗА В РАЙОНІ")
+        self.assertEqual(tn.ZONE_HEAD["obl"], "ЗАГРОЗА В ОБЛАСТІ")
+
+
+class DistCalTest(unittest.TestCase):
+    """30.10: калібрування з відстанню до свіжого положення цілі + поріг помаранчевого на каліброваному p_drone30."""
+
+    def test_platt_dist(self):
+        ab2, ab3 = (0.1, -2.0), (0.1, -0.3, -1.0)
+        self.assertAlmostEqual(tk._platt(0.3, ab2), tk._platt(0.3, ab2, 5.0))
+        near, far, none = (tk._platt(0.3, ab3, d) for d in (5.0, 100.0, None))
+        self.assertGreater(near, far)
+        self.assertAlmostEqual(none, tk._platt(0.3, ab3, 300.0))
+        self.assertAlmostEqual(tk._platt(0.3, ab3, 0.1), tk._platt(0.3, ab3, 2.0))
+
+    def test_nearest_km(self):
+        t = [{"cls": "drone", "obs_km": 40.0}, {"cls": "recon", "obs_km": 3.0}, {"cls": "missile", "obs_km": 80.0},
+             {"cls": "drone", "obs_km": None}]
+        self.assertEqual(tk.nearest_km(t), 40.0)
+        self.assertEqual(tk.nearest_km(t, "missile"), 80.0)
+        self.assertIsNone(tk.nearest_km([{"cls": "drone"}], "drone"))
+
+    def _tg(self, p, d):
+        return [{"cls": "drone", "p": {5: p, 15: p, 30: p}, "count": 1, "obs_km": d, "eta_min": None}]
+
+    def test_levels(self):
+        cal = {"drone": {T: (0.06, -0.2, -1.9) for T in (5, 15, 30)}, "any": {T: (0.12, -0.25, -1.1) for T in (5, 15, 30)}}
+        lv = {"orange": 0.05}
+        # сирий 0.2 ≥ 0.15 (старе правило — помаранчевий), але ціль далеко → калібрований < 0.05 → не помаранчевий
+        far = tk.threat_summary(self._tg(0.2, 250.0), cal, lv)
+        near = tk.threat_summary(self._tg(0.2, 10.0), cal, lv)
+        old = tk.threat_summary(self._tg(0.2, 250.0), cal, {})
+        self.assertLess(far["level"], 2)
+        self.assertEqual(near["level"], 2)
+        self.assertEqual(old["level"], 2)
+        red = tk.threat_summary(self._tg(0.6, 250.0), cal, lv)   # червоний — сирий p_drone15 ≥ 0.5, як раніше
+        self.assertEqual(red["level"], 3)
+
+    def test_obs_km(self):
+        class Tr:
+            proj = tk.Proj(49.068, 33.42) if hasattr(tk, "Proj") else None
+        if Tr.proj is None:
+            self.skipTest("no Proj")
+        tr = Tr(); now = 1e6
+        tr.last_pos = [now - 60, 49.068, 33.42 + 0.5, 5.0]
+        d = tk.Tracker._obs_km(tr, 49.068, 33.42, now)
+        self.assertAlmostEqual(d, 36.5, delta=1.5)
+        tr.last_pos = [now - 3600, 49.068, 33.92, 5.0]
+        self.assertIsNone(tk.Tracker._obs_km(tr, 49.068, 33.42, now))
+        tr.last_pos = [now - 60, 49.068, 33.92, 50.0]
+        self.assertIsNone(tk.Tracker._obs_km(tr, 49.068, 33.42, now))
