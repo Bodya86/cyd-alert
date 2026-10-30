@@ -119,24 +119,46 @@ class NewsLoop:
             self.saved_n = n
 
 
-_prim = {"at": 0.0, "alive": False}
+_prim = {"at": 0.0, "alive": False, "down_since": 0.0}
+# резерв перебирає сповіщення лише після PRIMARY_GRACE_S безперервної недоступності основного: 30.10 20:08 деплой
+# (перезапуск ~25 с) → резерв зі старим кодом надіслав власне повідомлення («НЕБЕЗПЕКА… ризик для міста»), яке основний
+# сервер не знав і не міг видалити — у чаті два повідомлення тривоги.
+PRIMARY_GRACE_S = 300
 
 
-def primary_notifies():
-    """Чи надсилає сповіщення основний сервер (Lightsail, PRIMARY_URL/api/health)? Тоді GitHub-резерв мовчить,
-    щоб не було дублів. Перевірка раз на 60 с; помилка/старі дані → резерв надсилає сам."""
+def _health_ok(h, now):
+    return bool(h.get("ok") and h.get("notify") and abs(now - float(h.get("now", 0))) < 120)
+
+
+def primary_notifies(fetch=None, now=None):
+    """Чи надсилає сповіщення основний сервер (PRIMARY_URL/api/health)? Тоді GitHub-резерв мовчить, щоб не було дублів.
+    Перевірка раз на 60 с; основний «мертвий» лише після PRIMARY_GRACE_S поспіль невдалих перевірок (деплой/перезапуск —
+    не привід). fetch(url) → dict — для тестів."""
     url = os.environ.get("PRIMARY_URL", "").rstrip("/")
     if not url:
         return False
-    if time.time() - _prim["at"] > 60:
-        _prim["at"] = time.time()
+    now = now or time.time()
+    if now - _prim["at"] > 60:
+        _prim["at"] = now
         try:
-            import urllib.request
-            with urllib.request.urlopen(urllib.request.Request(url + "/api/health", headers={"User-Agent": "cyd-live"}), timeout=8) as r:
-                h = json.loads(r.read().decode("utf-8"))
-            _prim["alive"] = bool(h.get("ok") and h.get("notify") and abs(time.time() - float(h.get("now", 0))) < 120)
+            if fetch:
+                h = fetch(url + "/api/health")
+            else:
+                import urllib.request
+                with urllib.request.urlopen(urllib.request.Request(url + "/api/health", headers={"User-Agent": "cyd-live"}),
+                                            timeout=8) as r:
+                    h = json.loads(r.read().decode("utf-8"))
+            ok = _health_ok(h, now)
         except Exception:  # noqa: BLE001
-            _prim["alive"] = False
+            ok = False
+        if ok:
+            _prim["down_since"] = 0.0
+            _prim["alive"] = True
+        else:
+            if not _prim["down_since"]:
+                _prim["down_since"] = now
+            # ще ніколи не бачили живим (старт резерву) — теж чекаємо grace
+            _prim["alive"] = now - _prim["down_since"] < PRIMARY_GRACE_S
     return _prim["alive"]
 
 
@@ -204,6 +226,9 @@ def main():
             try:
                 if not primary_notifies():
                     notifier.tick()
+                elif notifier.enabled and (notifier.mem.get("episode") or notifier.mem.get("clears") or notifier.mem.get("active")):
+                    # основний знову живий — прибираємо власні повідомлення резерву (у чаті лишається лише його)
+                    notifier.retire()
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
             try:

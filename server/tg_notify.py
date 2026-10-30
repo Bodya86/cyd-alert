@@ -584,6 +584,19 @@ class Notifier:
         self._save()
         return res
 
+    def retire(self):
+        """Резерв передає роботу основному: видалити всі свої повідомлення (тривога, «Відбій») і скинути стан епізоду.
+        Невдалі видалення (мережа/429) лишаються в episode — спробуємо при наступному виклику."""
+        ids = list(dict.fromkeys((self.mem.get("episode") or []) + (self.mem.get("clears") or [])
+                                 + ([self.mem["live"]["id"]] if (self.mem.get("live") or {}).get("id") else [])))
+        left = [m for m in ids if not self._delete(m)]
+        self.mem.update(episode=left, clears=[], live=None, active=False, sent_level=0, sent_key=None, sent_kinds=None,
+                        green_since=0, since=0)
+        self._save()
+        if ids:
+            _log(f"резерв → основний: видалено {len(ids) - len(left)}, лишилось {len(left)}")
+        return not left
+
     def _load_state(self):
         try:
             with open(state_path(self.out, self.cfg), encoding="utf-8") as f:
