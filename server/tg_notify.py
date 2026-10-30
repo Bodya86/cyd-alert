@@ -1,4 +1,4 @@
-"""Сповіщення в Telegram-бот із live-циклу (.github/workflows/live.yml).
+"""Сповіщення в Telegram-бот — лише з основного сервера (rt_server.py, Hetzner); GitHub Actions нічого не шле (30.10).
 
 Рівень для «вашої» адреси (data/notify.json: city/district) береться з api/state/<city>[/<district>].json,
 який щойно записав build_static.write_outputs (поле final — та сама логіка, що на ESP).
@@ -11,7 +11,7 @@
   • офіційний відбій у районі (official_end у стані, ≥ official_clear_s) → «Відбій» одразу;
     без нього — повернення до зеленого (стабільно clear_after_min хв) → усі повідомлення епізоду видаляються, лишається «🟢 Відбій»;
   • секрети TG_BOT_TOKEN / TG_CHAT_ID відсутні → модуль мовчки нічого не робить.
-Стан (останній надісланий рівень/час) — <out>/notify_state.json, переживає перезапуски live.yml через гілку data.
+Стан (останній надісланий рівень/час) — <out>/notify_state.json, переживає перезапуски сервера.
 """
 import io, json, math, os, time, urllib.error, urllib.parse, urllib.request, uuid
 os.environ.setdefault("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4")   # час у підписах — за Києвом (runner GitHub — UTC)
@@ -583,19 +583,6 @@ class Notifier:
         self.mem["level"] = level
         self._save()
         return res
-
-    def retire(self):
-        """Резерв передає роботу основному: видалити всі свої повідомлення (тривога, «Відбій») і скинути стан епізоду.
-        Невдалі видалення (мережа/429) лишаються в episode — спробуємо при наступному виклику."""
-        ids = list(dict.fromkeys((self.mem.get("episode") or []) + (self.mem.get("clears") or [])
-                                 + ([self.mem["live"]["id"]] if (self.mem.get("live") or {}).get("id") else [])))
-        left = [m for m in ids if not self._delete(m)]
-        self.mem.update(episode=left, clears=[], live=None, active=False, sent_level=0, sent_key=None, sent_kinds=None,
-                        green_since=0, since=0)
-        self._save()
-        if ids:
-            _log(f"резерв → основний: видалено {len(ids) - len(left)}, лишилось {len(left)}")
-        return not left
 
     def _load_state(self):
         try:

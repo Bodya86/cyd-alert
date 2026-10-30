@@ -21,7 +21,6 @@ import build_static as bs     # noqa: E402
 import server as srv          # noqa: E402
 import tracker as tk          # noqa: E402
 import jaam_ws                # noqa: E402
-import tg_notify              # noqa: E402
 import accuracy               # noqa: E402
 import news                   # noqa: E402
 
@@ -119,49 +118,6 @@ class NewsLoop:
             self.saved_n = n
 
 
-_prim = {"at": 0.0, "alive": False, "down_since": 0.0}
-# резерв перебирає сповіщення лише після PRIMARY_GRACE_S безперервної недоступності основного: 30.10 20:08 деплой
-# (перезапуск ~25 с) → резерв зі старим кодом надіслав власне повідомлення («НЕБЕЗПЕКА… ризик для міста»), яке основний
-# сервер не знав і не міг видалити — у чаті два повідомлення тривоги.
-PRIMARY_GRACE_S = 300
-
-
-def _health_ok(h, now):
-    return bool(h.get("ok") and h.get("notify") and abs(now - float(h.get("now", 0))) < 120)
-
-
-def primary_notifies(fetch=None, now=None):
-    """Чи надсилає сповіщення основний сервер (PRIMARY_URL/api/health)? Тоді GitHub-резерв мовчить, щоб не було дублів.
-    Перевірка раз на 60 с; основний «мертвий» лише після PRIMARY_GRACE_S поспіль невдалих перевірок (деплой/перезапуск —
-    не привід). fetch(url) → dict — для тестів."""
-    url = os.environ.get("PRIMARY_URL", "").rstrip("/")
-    if not url:
-        return False
-    now = now or time.time()
-    if now - _prim["at"] > 60:
-        _prim["at"] = now
-        try:
-            if fetch:
-                h = fetch(url + "/api/health")
-            else:
-                import urllib.request
-                with urllib.request.urlopen(urllib.request.Request(url + "/api/health", headers={"User-Agent": "cyd-live"}),
-                                            timeout=8) as r:
-                    h = json.loads(r.read().decode("utf-8"))
-            ok = _health_ok(h, now)
-        except Exception:  # noqa: BLE001
-            ok = False
-        if ok:
-            _prim["down_since"] = 0.0
-            _prim["alive"] = True
-        else:
-            if not _prim["down_since"]:
-                _prim["down_since"] = now
-            # ще ніколи не бачили живим (старт резерву) — теж чекаємо grace
-            _prim["alive"] = now - _prim["down_since"] < PRIMARY_GRACE_S
-    return _prim["alive"]
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="public")
@@ -189,8 +145,7 @@ def main():
         t0 = time.time()
         while time.time() - t0 < 20 and not srv.jaam.snapshot()[2]:
             time.sleep(0.5)
-    notifier = tg_notify.Notifier(out)
-    log("telegram-сповіщення: " + ("увімкнено" if notifier.enabled else "вимкнено (немає секретів TG_BOT_TOKEN/TG_CHAT_ID)"))
+    # Telegram-сповіщення надсилає лише основний сервер (rt_server.py); live.py їх не шле (30.10: GitHub-резерв прибрано).
     acc = accuracy.AccuracyLog(out)
     pub = Publisher(out, a.branch) if a.push else None
     chans = bs.all_channels()
@@ -223,14 +178,6 @@ def main():
             bs.write_outputs(out, state_path, chans, do_outage=do_out, next_in=int(a.interval))
             if do_out:
                 last_out = time.time()
-            try:
-                if not primary_notifies():
-                    notifier.tick()
-                elif notifier.enabled and (notifier.mem.get("episode") or notifier.mem.get("clears") or notifier.mem.get("active")):
-                    # основний знову живий — прибираємо власні повідомлення резерву (у чаті лишається лише його)
-                    notifier.retire()
-            except Exception:  # noqa: BLE001
-                traceback.print_exc()
             try:
                 if acc.tick(srv.trk):
                     acc.summarize(force=True)
