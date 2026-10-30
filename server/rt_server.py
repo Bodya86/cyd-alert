@@ -25,6 +25,7 @@ import analyzer as an         # noqa: E402
 import outage                 # noqa: E402
 import jaam_ws                # noqa: E402
 import tg_notify              # noqa: E402
+import tg_overview            # noqa: E402
 import tg_mtproto             # noqa: E402
 import accuracy               # noqa: E402
 import flasher                # noqa: E402
@@ -250,6 +251,10 @@ class Engine(threading.Thread):
                 time.sleep(0.5)
         notifier = tg_notify.Notifier(out, threaded=True)   # мережа/рендер мапи — у фоновому потоці
         STATS["notify"] = notifier.enabled
+        if tg_notify.load_cfg().get("overview", True):
+            # постійна мапа всієї України (окреме повідомлення, редагується ≤ раз на overview_edit_s; тривоги її не чіпають)
+            ovm = tg_overview.OverviewMap(out, edit_s=tg_notify.load_cfg().get("overview_edit_s", 5))
+            ovm.start()
         log("telegram-сповіщення: " + ("увімкнено" if notifier.enabled else "вимкнено (немає TG_BOT_TOKEN/TG_CHAT_ID у /etc/cyd-alert/env)"))
         acc = accuracy.AccuracyLog(out)
         # журнал прогнозів «проліт ≤ R за 30 хв» + фактичних результатів (поза public/, не віддається по HTTP)

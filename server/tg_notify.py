@@ -475,11 +475,20 @@ class Notifier:
     def _delete(self, mid):
         """→ True — повідомлення вже немає (видалено / не знайдено / старше 48 год); False — спробувати пізніше.
         30.10: мережеві збої (TgError 0 / 5xx) вважались успіхом — id випадав з епізоду, а повідомлення лишалось сиротою."""
+        if mid and mid == self._overview_id():
+            return True   # постійна мапа України (tg_overview) — ніколи не видаляється логікою тривог
         try:
             self._api("deleteMessage", {"message_id": mid})
             return True
         except TgError as e:
             return e.code in (400, 403) and e.code != 429
+
+    def _overview_id(self):
+        try:
+            with open(os.path.join(self.out, "overview_state.json"), encoding="utf-8") as f:
+                return json.load(f).get("id")
+        except (OSError, ValueError, AttributeError):
+            return None
 
     def _edit(self, st, level, text, sig, now=None):
         """Оновити live-повідомлення. → True (оновлено/без змін) | False (спробувати пізніше) | None (зникло)."""
