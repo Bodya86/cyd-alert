@@ -51,6 +51,16 @@ TYPES = {
     "kinzhal":   dict(v=(4500, 1000), turn=1, ttl=8 * 60, cls="missile", rng=None, label="Кинджал/Циркон",   ch="Z", lc="B"),
 }
 EVENT_TYPES = ("ballistic", "kinzhal")    # без траєкторії — апріорна ймовірність за районом/областю
+# апріорні P(у радіусі R) для події: свій район / своя область / місце < 150 км / далеке місце.
+# Далеке було 0.05: 3 репости «балістика на Київ» давали 1−0.95³ = 0.14 ≥ 0.10 → червоний у Кременчуці (аудит 30.10).
+EVENT_P = dict(raion=0.6, oblast=0.3, near=0.25, far=0.01)
+# дублікати однієї цілі (асоціація не спрацювала) не множаться як незалежні: кластер того ж класу ближче DEDUP_KM
+# з курсом ±DEDUP_DEG → одна ціль (max p, max count). 0 — вимкнено.
+# Вимкнено: бектест 08–10.2026 (аудит 30.10) — сирий BSS кращий, але червоний на holdout рідше влучає (hit 0.307→0.283,
+# precision 0.111→0.108): близькі співнапрямлені треки — часто справжня група шахедів, а не дубль. Пороги рівнів
+# налаштовані на «множення»; вмикати лише разом із перенастроюванням порогів.
+DEDUP_KM = 0.0
+DEDUP_DEG = 35.0
 DRONE_TYPES = {k for k, v in TYPES.items() if v["cls"] == "drone"}
 
 
@@ -610,7 +620,9 @@ class Track:
                         x, y = x + d * math.sin(hd), y + d * math.cos(hd)
                         dist += d
                     pts.append((x, y))
-                tr.append((w * sub, pts))
+                tr.append((w, pts))
+            sw = sum(w for w, _ in tr) or 1.0          # нормування підвибірки (було w·sub: Σ ≠ 1 при нерівних вагах)
+            tr = [(w / sw, pts) for w, pts in tr]
             self._traj, self._traj_key = tr, key
             mx, my, *_ = self.mean()
             self._reach = (mx, my, max(math.hypot(p[-1][0] - p[0][0], p[-1][1] - p[0][1]) + math.hypot(p[0][0] - mx, p[0][1] - my)
@@ -877,16 +889,23 @@ class Tracker:
                             heading_conf=round(Rh, 2), speed=round(v), sd_km=round(sd, 1),
                             age_s=int(now - tr.last_obs), obs=tr.nobs, src=sorted(tr.src),
                             trail=[[p[1], p[2]] for p in getattr(tr, "trail", [])], **f))
-        # балістика/КАБ «подією»: без траєкторії — апріорна ймовірність за збігом району/області
-        for (t0, typ, reg, ob, place) in self.events:
+        # балістика/КАБ «подією»: без траєкторії — апріорна ймовірність за збігом району/області.
+        # Та сама подія з кількох каналів (репости) — одна: інакше threat_summary множить її як незалежні цілі.
+        uniq = {}
+        for e in self.events:
+            t0, typ, reg, ob, place = e
+            key = (typ, reg, ob, round(place["lat"], 1) if place else None, round(place["lon"], 1) if place else None)
+            if key not in uniq or t0 > uniq[key][0]:
+                uniq[key] = e
+        for (t0, typ, reg, ob, place) in sorted(uniq.values(), key=lambda e: e[0]):
             if reg is not None and reg >= 0 and reg == user_region:
-                p = 0.6
+                p = EVENT_P["raion"]
             elif ob is not None and ob >= 0 and ob == user_oblast:
-                p = 0.3
+                p = EVENT_P["oblast"]
             elif place and math.hypot(*Proj(ulat, ulon).xy(place["lat"], place["lon"])) < 150:
-                p = 0.25
+                p = EVENT_P["near"]
             else:
-                p = 0.05
+                p = EVENT_P["far"]
             age = (now - t0) / 60
             out.append(dict(id=-int(t0) % 100000, type=typ, label=TYPES[typ]["label"], ch=TYPES[typ]["ch"], lc=TYPES[typ]["lc"], cls="missile",
                             count=1, lat=place["lat"] if place else None, lon=place["lon"] if place else None,
@@ -923,6 +942,33 @@ def scope_probs(trk, zones, now=None, maxkm=260.0):
     return {k: round(1 - q[k], 3) for k in names}
 
 
+def dedup_targets(targets, km=None, deg=None):
+    """Кластери ймовірних дублікатів (той самий клас, ближче km, курс ±deg; події/без координат — окремо) →
+    по одному представнику з max p по горизонтах і max count. Порядок і решта полів — від найнебезпечнішого."""
+    km = DEDUP_KM if km is None else km
+    deg = DEDUP_DEG if deg is None else deg
+    if not km:
+        return targets
+    out = []
+    for d in sorted(targets, key=lambda d: -d["p"].get(30, d["p"].get("30", 0))):
+        if d.get("lat") is None or d.get("heading") is None or "event" in (d.get("src") or ()):
+            out.append(d)
+            continue
+        for c in out:
+            if (c.get("lat") is None or c.get("heading") is None or c["cls"] != d["cls"] or "event" in (c.get("src") or ())):
+                continue
+            pr = Proj(c["lat"], c["lon"])
+            same_hd = (abs((d["heading"] - c["heading"] + 180) % 360 - 180) <= deg
+                       or min(d.get("heading_conf", 1), c.get("heading_conf", 1)) < 0.3)   # курс невідомий — не розрізняє
+            if math.hypot(*pr.xy(d["lat"], d["lon"])) <= km and same_hd:
+                c["p"] = {T: max(c["p"][T], d["p"].get(T, 0)) for T in c["p"]}
+                c["count"] = max(c["count"], d["count"])
+                break
+        else:
+            out.append(dict(d, p=dict(d["p"])))
+    return out
+
+
 def _platt(p, ab):
     p = min(0.999, max(0.001, p))
     return 1 / (1 + math.exp(-(ab[0] * math.log(p / (1 - p)) + ab[1])))
@@ -934,6 +980,7 @@ def threat_summary(targets, cal=None):
     Сирі ймовірності переоцінюють (бектест: при 0.68 збувається ~19 %) → p_any/p_drone/p_missile калібруються
     (CITY_CAL, Platt по горизонтах; немає цілей класу — 0). Рівень (level) — з сирих, як і раніше; сирі — у s["raw"]."""
     cal = CITY_CAL if cal is None else cal
+    targets = dedup_targets(targets)
 
     def comb(cls, T):
         q = 1.0

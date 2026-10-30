@@ -66,6 +66,25 @@ int main(int argc, char** argv) {
     e = analyzePost("Загроза балістики! Можлива атака, всім в укриття", k, -1, false, 0);
     check(!e.ignored, "live warning not ignored");
     check(!isForecastPost(" совершени первие пусковие маневри со всех бортов ракети ждем в течении следующих 30-50 минут "), "launch in N min is live");
+    // звіти постфактум (= server is_report; 30.10 07:26 хибний червоний — у прошивці не було)
+    e = analyzePost("⚡️ ЗБИТО/ПОДАВЛЕНО 71 ВОРОЖИЙ БПЛА У ніч на 28 жовтня противник атакував балістичною ракетою Іскандер-М", k, -1, false, 1);
+    check(e.ignored && e.level == LVL_GREEN, "report: zbyto/podavleno ignored");
+    e = analyzePost("Уночі над Україною знешкодили 152 ворожі БпЛА. У ніч на 18 жовтня росія атакувала Україну балістичною ракетою", k, -1, false, 0);
+    check(e.ignored && e.level == LVL_GREEN, "report: u nich na N ignored");
+    e = analyzePost("Попередньо. вранці ворог застосував 6 крилатих ракет по Кременчуку.", k, -1, false, 1);
+    check(e.ignored, "report: vrantsi voroh zastosuvav ignored");
+    e = analyzePost("В ночь на 30 октября враг атаковал Кременчуг ракетами", k, -1, false, 1);
+    check(e.ignored, "report RU: v noch na N");
+    e = analyzePost("Ворог атакував Кременчук, працює ППО", k, -1, false, 1);
+    check(!e.ignored && e.level >= LVL_ORANGE, "live attack not a report");
+    e = analyzePost("Ворог атакував Кременчук 2 ракетами, ще підльот", k, -1, false, 1);
+    check(!e.ignored, "pidlot is live");
+    check(isReportPost(" за нич ворог застосував 9 ракет ") && !isReportPost(" ракета на кременчук "), "isReportPost");
+    // «мКР» — малогабаритна КР (ракета), «мкр.» — мікрорайон
+    e = analyzePost("❗️2 мКР на Кременчук", k, -1, false, 1);
+    check(e.level == LVL_RED, "mKR is missile");
+    e = analyzePost("мкр. Молодіжний — шахед", k, -1, false, 1);
+    check(e.level != LVL_RED || strcmp(e.kind, "Ракети") != 0, "mkr. microdistrict not missile");
     char sb[96]; stripSignature("Шахед на Полтаву 📣 ППО Полтавщина", sb, sizeof(sb));
     check(!strcmp(sb, "Шахед на Полтаву"), "strip signature");
   }

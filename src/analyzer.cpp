@@ -175,7 +175,7 @@ static int forecastMarks(const char* t) {
   return n;
 }
 static bool liveNow(const char* t) {
-  static const char* const SUB[] = {"курс", "пидлит", "подлет", "пидльот", "летит", "летить", "летять", "летят", "укрит",
+  static const char* const SUB[] = {"курс", "пидлит", "подлет", "пидлот", "летит", "летить", "летять", "летят", "укрит",
       "вибух", "взрив", "запуск", "зараз", "сейчас", "терминово", "срочно", "над мистом", "над городом",
       "над нами", "злит", "злет", "взлет"};
   for (auto s : SUB) if (strstr(t, s)) return true;
@@ -194,6 +194,87 @@ static bool liveNow(const char* t) {
 bool isForecastPost(const char* folded) {
   int n = forecastMarks(folded);
   return n >= 3 || (n >= 1 && !liveNow(folded));
+}
+
+// ---- підсумок постфактум (= server/analyzer.py is_report: RETRO_STRONG_RE / RETRO_RE+RETRO_HINT_RE / LIVE_RE) ----
+// «У ніч на 28 жовтня противник атакував…», «ЗБИТО/ПОДАВЛЕНО…», «Попередньо, вранці ворог застосував 6 ракет» — не загроза зараз
+// (30.10 07:26 хибний червоний; на сервері виправлено в 7e79985, у прошивці не було — аудит моделі 30.10).
+static bool isWB(unsigned char c) { return c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+static const char* skipWS(const char* p) { while (*p == ' ' || *p == '\n' || *p == '\t' || *p == '\r') p++; return p; }
+static bool retroStrong(const char* t) {
+  for (const char* st : {"збито", "сбито"})
+    for (const char* p = strstr(t, st); p; p = strstr(p + 1, st)) {
+      const char* q = skipWS(p + strlen(st));
+      if (*q != '/') continue;
+      q = skipWS(q + 1);
+      if (!strncmp(q, "подавлено", strlen("подавлено"))) return true;
+    }
+  for (const char* pre : {"у нич на ", "в нич на ", "у ноч на ", "в ноч на "})
+    for (const char* p = strstr(t, pre); p; p = strstr(p + 1, pre)) {
+      if (p > t && isWB((unsigned char)p[-1])) continue;
+      const char* q = p + strlen(pre);
+      if (*q >= '0' && *q <= '9') return true;
+    }
+  for (const char* pre : {"за нич ", "за ноч ", "за добу ", "за сутки "})
+    for (const char* p = strstr(t, pre); p; p = strstr(p + 1, pre)) {
+      const char* q = p + strlen(pre);
+      if (startsAny(q, (const char* const[]){"ворог", "противник", "враг"}, 3)) return true;
+    }
+  return false;
+}
+static bool retroVerb(const char* q) {
+  static const char* const V[] = {"застосував", "применил", "атакував", "атаковал", "використав", "исползовал"};
+  return startsAny(q, V, 6);
+}
+static bool retroSubjVerb(const char* t) {
+  static const char* const STEM[] = {"ворог", "противник", "окупант"};       // + \w*
+  static const char* const EXACT[] = {"рф", "росия", "россия", "враг"};
+  auto after = [&](const char* q) -> bool {      // \s+(\w+\s+)?VERB
+    if (*q != ' ' && *q != '\n' && *q != '\t' && *q != '\r') return false;
+    q = skipWS(q);
+    if (retroVerb(q)) return true;
+    const char* w = q;
+    while (*w && isWB((unsigned char)*w)) w++;
+    if (w == q || (*w != ' ' && *w != '\n' && *w != '\t' && *w != '\r')) return false;
+    return retroVerb(skipWS(w));
+  };
+  for (const char* s : STEM)
+    for (const char* p = strstr(t, s); p; p = strstr(p + 1, s)) {
+      const char* q = p + strlen(s);
+      // \w* жадібний, але regex відступає: перевірити кожну межу всередині слова
+      for (;;) { if (after(q)) return true; if (!*q || !isWB((unsigned char)*q)) break; q++; }
+    }
+  for (const char* s : EXACT)
+    for (const char* p = strstr(t, s); p; p = strstr(p + 1, s)) if (after(p + strlen(s))) return true;
+  return false;
+}
+static bool retroHint(const char* t) {
+  for (const char* p = t; *p; p++) if (*p >= '0' && *p <= '9') return true;
+  static const char* const H[] = {"попередн", "предварит", "вранци", "утром", "вночи", "ночю", "вчора", "вчера", "минулои", "прошлой"};
+  for (auto h : H) if (strstr(t, h)) return true;
+  return false;
+}
+static bool retroLive(const char* t) {
+  static const char* const L[] = {"курс", "пидлит", "подлет", "пидлот", "летит", "летить", "летять", "летят", "укрит", "напрям",
+      "направлен", "загроз", "угроз", "тривог", "тревог", "вибух", "взрив", "ппо", "зараз", "сейчас", "работа", "працю"};
+  for (auto l : L) if (strstr(t, l)) return true;
+  return false;
+}
+bool isReportPost(const char* folded) {
+  return retroStrong(folded) || (retroSubjVerb(folded) && retroHint(folded) && !retroLive(folded));
+}
+// (fold: ь прибрано, ї→и — тому «ноч», «ночю», «минулои»)
+// «мКР»/«МКР» (малогабаритна КР «Бандероль»), регістр важливий: «мкр.» — мікрорайон (= server MKR_RE)
+static bool hasMkr(const char* raw) {
+  for (const char* s : {"\xD0\xBC\xD0\x9A\xD0\xA0", "\xD0\x9C\xD0\x9A\xD0\xA0"})   // мКР, МКР
+    for (const char* p = strstr(raw, s); p; p = strstr(p + 1, s)) {
+      unsigned char b = p > raw ? (unsigned char)p[-1] : ' ';
+      unsigned char a = (unsigned char)p[6];
+      if (p > raw && (isWB(b) || b == '-')) continue;
+      if (a && (isWB(a) || a == '-' || a == '.')) continue;
+      return true;
+    }
+  return false;
 }
 static size_t u8len(const char* s, size_t n) { size_t c = 0; for (size_t i = 0; i < n; i++) if ((s[i] & 0xC0) != 0x80) c++; return c; }
 // підпис каналу внизу («📣 ППО Полтавщина») — не місце події: обрізати (out — копія тексту)
@@ -222,10 +303,12 @@ PostEval analyzePost(const char* text, const CityDef* city, int district, bool r
   stripSignature(text, raw, sizeof(raw));
   text = raw;
   utf8Fold(text, low, sizeof(low));
+  if (hasMkr(text)) strlcat(low, "бандерол ", sizeof(low));
 
   // 1) реклама / вакансії
   int ign = countWords(low, RULE_IGNORE.w, RULE_IGNORE.n);
   if (ign >= 2 || (ign >= 1 && strlen(low) > 350)) { ev.ignored = true; return ev; }
+  if (isReportPost(low)) { ev.ignored = true; strlcpy(ev.reason, "звіт постфактум", sizeof(ev.reason)); return ev; }
   if (isForecastPost(low)) { ev.ignored = true; strlcpy(ev.reason, "попередження / прогноз, не ціль зараз", sizeof(ev.reason)); return ev; }
 
   // 2) тип загрози

@@ -35,6 +35,7 @@ Level agedLevel(const PostEval& e, long ageMin);
 // home = true: міський канал саме цього міста — лише тоді «по нам / над містом» означає ваше місто
 // Попередження/прогноз/новина про можливу атаку (folded-текст) — не ціль зараз (= server/analyzer.py is_forecast)
 bool isForecastPost(const char* folded);
+bool isReportPost(const char* folded);
 // Обрізати підпис каналу в кінці («📣 ППО Полтавщина») — копія в out
 void stripSignature(const char* in, char* out, size_t outSize);
 PostEval analyzePost(const char* text, const CityDef* city, int district, bool remote = false, int home = -1);

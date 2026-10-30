@@ -39,7 +39,7 @@ def ts_of(s):
 
 def load_posts(t0, t1):
     out = []
-    for p in glob.glob(os.path.join(ROOT, "data", "history", "raw", "*.jsonl")):
+    for p in glob.glob(os.path.join(os.environ.get("CYD_RAW_DIR") or os.path.join(ROOT, "data", "history", "raw"), "*.jsonl")):
         ch = os.path.basename(p)[:-6]
         for line in open(p, encoding="utf-8"):
             try:
