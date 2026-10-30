@@ -27,6 +27,8 @@ TYPES = {
     "recon":     dict(v=(120, 25),  turn=6, ttl=35 * 60, cls="drone",   rng=None, label="Розвідник",        ch="D"),
     "unknown":   dict(v=(200, 80),  turn=4, ttl=25 * 60, cls="drone",   rng=None, label="Ціль",             ch="U"),
     "cruise":    dict(v=(800, 80),  turn=1.5, ttl=12 * 60, cls="missile", rng=None, label="Крилата ракета",   ch="C"),
+    # мКР/баражуючий боєприпас «Бандероль» (S8000, ГУР): крейсерська 520–560 км/год, макс. ~650; маневрує крутіше за КР
+    "banderol":  dict(v=(530, 60),  turn=3, ttl=15 * 60, cls="missile", rng=None, label="Бандероль (мКР)",  ch="C"),
     "kab":       dict(v=(450, 100), turn=1,  ttl=6 * 60,  cls="missile", rng=70,   label="КАБ",              ch="K"),
     "ballistic": dict(v=(3000, 500), turn=1, ttl=10 * 60,  cls="missile", rng=None, label="Балістика",        ch="B"),
 }
@@ -155,7 +157,7 @@ class Gazetteer:
 HEAD_RE = r"(курсом на|курс на|в бік|у бік|в сторону|в направлении|у напрямку|в напрямку|напрямок на|летить на|летит на|летять на|летят на|рухається на|движется на|заходить на|заходит на|на)"
 FROM_RE = r"(з боку|зі сторони|со стороны|з напрямку|с направления|від|из|з)"
 POS_RE = r"(над|в районі|в районе|біля|возле|поблизу|около|в|у|повз|мимо)"
-COUNT_RE = re.compile(r"(\d{1,2})\s*(х|x|шт|шахед|мопед|бпла|дрон|ціл|цел|ракет|каб)")
+COUNT_RE = re.compile(r"(\d{1,2})\s*(х|x|шт|шахед|мопед|бпла|дрон|ціл|цел|ракет|каб|бандер[оo]л)")
 
 TYPE_WORDS = [
     ("ballistic", ["баліст", "баллист", "балист", "іскандер", "искандер", "кинджал", "кинжал", "кн-23", "kn-23"]),
@@ -169,11 +171,16 @@ TYPE_WORDS = [
 KILL_WORDS = ["збит", "сбит", "мінус", "минус", "знищ", "уничтож", "приземл"]
 
 
+# «Бандероль»/«бандеролька»/«бандероди» (опечатка), «мКР», S8000 — НЕ «Бандери» (вулиця): лише «бандерол»/«бандерод»
+BANDEROL_HINT = re.compile(r"бандер[оo]л|бандерод|[sс][\s-]?8000")
+MKR_RE = re.compile(r"(?<![\w-])(мКР|МКР)(?![\w.-])")   # «мКР» (регістр!) — не «мкр.» (мікрорайон)
 CRUISE_HINT = re.compile(r"крилат|крылат|[иі]скандер[\s-]*к\b")
 BALLISTIC_HINT = re.compile(r"баліст|баллист|балист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон")
 
 
 def detect_type(t, raw=None):
+    if (BANDEROL_HINT.search(t) or (raw and MKR_RE.search(raw))) and not BALLISTIC_HINT.search(t):
+        return "banderol"        # повільніша за КР (~530 км/год) — інакше прогноз прольоту на ~20 хв раніше (30.10 10:24 vs 10:48)
     if CRUISE_HINT.search(t) and not BALLISTIC_HINT.search(t):
         return "cruise"          # «Іскандер-К», «крилаті ракети» — крилата ракета з траєкторією, не балістика
     for typ, kws in TYPE_WORDS:
@@ -184,6 +191,8 @@ def detect_type(t, raw=None):
         import analyzer as an
         best, _ = an.threat_of(an.fold(raw if raw is not None else t))
         if best:
+            if best[1].get("sub") == "banderol":
+                return "banderol"
             return {"ballistic": "ballistic", "missile": "cruise", "kab": "kab", "drone": "shahed",
                     "generic": "unknown"}.get(best[1]["type"])
     except Exception:  # noqa: BLE001
@@ -294,7 +303,7 @@ OBL_WORDS = [("крим", 0), ("волин", 1), ("вінниччин", 2), ("в
              ("херсонщин", 22), ("хмельниччин", 23), ("хмельнитчин", 23), ("черкащин", 24), ("буковин", 25),
              ("чернігівщин", 26), ("черниговщин", 26)]
 OBL_HDR_RE = re.compile(r"(?=(?:[А-ЯІЇЄҐ][а-яіїєґ'’]+(?:щина|щини|ччина|ччини|ття|жжя|ччя))\s*[:—–-])")
-CLAUSE_RE = re.compile(r"(?=(?<![\w-])(?:\d{1,2}\s*[хx]\s*)?(?:(?:реактивн|швидкісн|ударн)\w*\s+)?(?:бпла|шахед|дрон|ракет|каб\b|мопед)\w*)", re.I)
+CLAUSE_RE = re.compile(r"(?=(?<![\w-])(?:\d{1,2}\s*[хx]\s*)?(?:(?:реактивн|швидкісн|ударн)\w*\s+)?(?:бпла|шахед|дрон|ракет|каб\b|мопед|бандер[оo]л)\w*)", re.I)
 HEAD_CNT_RE = re.compile(r"(курсом|курс на|в напрямку|у напрямку|в бік|у бік|в сторону|в направлении)", re.I)
 
 
@@ -364,6 +373,14 @@ class Track:
             v = max(vm * 0.4, rnd.gauss(vm, vs))
             self.p.append([x, y, h % TWO_PI, v, 0.0])
         self.w = [1.0 / N] * N
+
+    def retype(self, typ):
+        """Зміна типу з перемасштабуванням швидкостей частинок під новий тип (КР 800 → «Бандероль» 530 км/год)."""
+        old = self.cfg["v"][0]
+        self.type, self.cfg = typ, TYPES[typ]
+        vm, vs = self.cfg["v"]
+        for q in self.p:
+            q[3] = min(vm + 3 * vs, max(vm - 3 * vs, q[3] * vm / old))
 
     # --- рух ---
     def predict_to(self, t):
@@ -570,10 +587,18 @@ class Tracker:
         self.gaz = gaz or Gazetteer()
         self.tracks = []
         self.rnd = random.Random(seed)
+        self.seed = seed
         self.seen_posts = set()
         self.events = []       # балістика по регіонах без траєкторії: (t, type, region, oblast, place)
         self.home = None       # місто Telegram-каналу (dict з lat/lon) — апріорна зона для постів без місця
         self.history = None    # history.History — історичне апріорі (поле курсів, P(ціль)); None — без нього
+
+    def _trng(self, ts, lat, lon, typ):
+        """ГВЧ нової цілі. Із seed (бектест) — від (час, місце, тип), а не зі спільного потоку: нова/зайва ціль
+        не змінює випадковості всіх наступних (інакше метрики «плавали» від будь-якої зміни класифікації)."""
+        if self.seed is None:
+            return random.Random(self.rnd.random())
+        return random.Random(f"{self.seed}|{int(ts)}|{lat:.3f}|{lon:.3f}|{typ}")
 
     def _alive(self, now):
         self.tracks = [tr for tr in self.tracks if now - tr.last_obs < tr.cfg["ttl"]]
@@ -582,7 +607,8 @@ class Tracker:
     def _compatible(self, tr, typ):
         if typ is None or typ == "unknown" or tr.type == "unknown":
             return TYPES[tr.type]["cls"] == TYPES[typ or "unknown"]["cls"] or typ in (None, "unknown")
-        return tr.type == typ or (tr.type in DRONE_TYPES and typ in DRONE_TYPES and "jet" not in (tr.type, typ))
+        return tr.type == typ or (tr.type in DRONE_TYPES and typ in DRONE_TYPES and "jet" not in (tr.type, typ)) or \
+            {tr.type, typ} == {"cruise", "banderol"}     # «ракета» про вже відому «Бандероль» — та сама ціль
 
     def add_post(self, text, ts, city=None, src="tg", default_type=None, post_id=None):
         if post_id is not None:
@@ -684,14 +710,14 @@ class Tracker:
                     pass         # курс без положення і без відповідної цілі — ігноруємо (нема де поставити ціль)
                 elif HEAD_ASSOC_KM and HEAD_NEW_SIGMA and (cues.get("oblast") is not None or not self.home):
                     # дайджест «Область: БпЛА курсом на X» без положення: ціль на підльоті до X (σ HEAD_NEW_SIGMA км)
-                    tr = Track(typ, h["lat"], h["lon"], HEAD_NEW_SIGMA, ts, random.Random(self.rnd.random()),
+                    tr = Track(typ, h["lat"], h["lon"], HEAD_NEW_SIGMA, ts, self._trng(ts, h["lat"], h["lon"], typ),
                                count=cues["count"], src=src)
                     tr.obs_heading_to(h["lat"], h["lon"], kappa=4.0)
                     self.tracks.append(tr)
                     touched.append(("new", tr.id))
                 elif self.home:
                     # нова ціль «десь у зоні каналу» (σ 35 км навколо міста), курс на X
-                    tr = Track(typ, self.home["lat"], self.home["lon"], 35.0, ts, random.Random(self.rnd.random()),
+                    tr = Track(typ, self.home["lat"], self.home["lon"], 35.0, ts, self._trng(ts, self.home["lat"], self.home["lon"], typ),
                                count=cues["count"], src=src)
                     tr.obs_heading_to(h["lat"], h["lon"], kappa=4.0)
                     self.tracks.append(tr)
@@ -710,6 +736,8 @@ class Tracker:
             tr = best
             if typ != tr.type and tr.type == "unknown":
                 tr.type, tr.cfg = typ, TYPES[typ]
+            elif typ == "banderol" and tr.type == "cruise":
+                tr.retype("banderol")      # уточнення: «ракета» → «Бандероль» (повільніша)
             ok = tr.obs_pos(p["lat"], p["lon"], sigma)
             if not ok:
                 best = None
@@ -724,7 +752,7 @@ class Tracker:
                 o = cues["origin"][0]
                 pr = Proj(p["lat"], p["lon"]); ox, oy = pr.xy(o["lat"], o["lon"])
                 head, kappa = bearing_xy(ox, oy, 0, 0), 2.0
-            tr = Track(typ, p["lat"], p["lon"], sigma, ts, random.Random(self.rnd.random()), head, kappa, cues["count"], src,
+            tr = Track(typ, p["lat"], p["lon"], sigma, ts, self._trng(ts, p["lat"], p["lon"], typ), head, kappa, cues["count"], src,
                        prior=None if cues["heading"] else self.history)
             tr.last_pos = [int(ts), round(p["lat"], 4), round(p["lon"], 4), round(sigma, 1)]
             self.tracks.append(tr)
@@ -758,7 +786,7 @@ class Tracker:
                 tr.obs_region(lat, lon, rad)
                 tr.last_obs = ts; tr.src.add(src)
             else:
-                self.tracks.append(Track(t, lat, lon, max(8.0, rad * 0.6), ts, random.Random(self.rnd.random()), src=src))
+                self.tracks.append(Track(t, lat, lon, max(8.0, rad * 0.6), ts, self._trng(ts, lat, lon, t), src=src))
 
     def alert_change(self, region, started, ts, drones=False):
         """Зміна статусу тривоги в районі — дуже слабке спостереження для наявних цілей."""

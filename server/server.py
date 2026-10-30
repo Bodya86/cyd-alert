@@ -60,7 +60,7 @@ SCOPE_TXT = {"oblast": "область", "raion": "район", "city": "міс�
 SCOPE_LVL = {"oblast": an.YELLOW, "raion": an.YELLOW, "city": an.ORANGE, "district": an.RED}
 SCOPE_MIN_P = {"oblast": 0.3, "raion": 0.25, "city": 0.15, "district": 0.3}
 KIND_TXT = {"drone": "Дрони — Шахед/БпЛА", "missile": "Ракети", "ballistic": "Балістика", "kab": "КАБ",
-            "aircraft": "Авіація", "generic": "Ціль"}
+            "aircraft": "Авіація", "generic": "Ціль", "banderol": "Ракети — Бандероль"}
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
@@ -501,6 +501,10 @@ def state(q):
         kind = d0["type"] if d0["type"] in KIND_TXT else ("drone" if d0["cls"] == "drone" else "missile")
     if not kind and final > an.GREEN:
         kind = "missile" if off_lvl >= an.ORANGE else "drone"
+    # мКР «Бандероль» — окремий підпис: пост про неї або ракетна ціль трекера поруч саме цього типу
+    if kind == "missile" and ((lvl > an.GREEN and ev.sub == "banderol") or
+                              any(d["type"] == "banderol" and d["p"][30] >= 0.05 for d in tg[:6])):
+        kind = "banderol"
     thr = (KIND_TXT.get(kind, "Ціль") + (", " + SCOPE_TXT[scope] if scope else "")) if final > an.GREEN else "Загроз немає"
     # новини про влучання — лише інформація: де б'ють останнім часом (рівень НЕ змінюють)
     nw = None

@@ -220,7 +220,7 @@ def extract(posts, geo):
             if hit and (pos or head):
                 g = (pos or head)[0]
                 ev.append(dict(ts=p["ts"], ch=p["ch"], typ=typ, kind="hit", lat=g["lat"], lon=g["lon"], name=g["name"], ob=g["ob"]))
-            if typ not in DRONES and typ not in ("cruise", "kab", "recon"):
+            if typ not in DRONES and typ not in ("cruise", "banderol", "kab", "recon"):
                 continue
             src = pos[-1] if pos else None
             for g in pos:

@@ -43,6 +43,7 @@ RETRO_HINT_RE = re.compile(r"\d|попередн|предварит|вранци
 RETRO_STRONG_RE = re.compile(r"[зс]бито\s*/\s*подавлено|\b(у|в) (нич|ночь) на \d|за (нич|ночь|добу|сутки) (ворог|противник|враг)")
 LIVE_RE = re.compile(r"курс|пидлит|подлет|пидльот|летит|летить|летять|летят|укрит|укрыт|напрям|направлен|загроз|угроз|тривог|тревог|"
                      r"вибух|взрыв|ппо|зараз|сейчас|работа|працю")
+MKR_RE = re.compile(r"(?<![\w-])(мКР|МКР)(?![\w.-])")
 # «Іскандер-К» / «крилаті ракети» — крилата ракета (траєкторія, хвилини), не балістика
 CRUISE_RE = re.compile(r"крилат|крылат|[иі]скандер[\s-]*к\b")
 BALLISTIC_RE = re.compile(r"балист|баллист|кинджал|кинжал|кн-23|kn-23|[иі]скандер[\s-]*м\b|циркон")
@@ -172,6 +173,7 @@ class PostEval:
     local: bool = False        # згадано ваше місто/район/село/область або місце ближче NEAR_KM
     place: str = ""            # ключ місця для дедуплікації між каналами
     threat: str = ""           # тип загрози (ballistic/missile/kab/drone/...)
+    sub: str = ""              # підтип (rules.json "sub"): "banderol" — мКР «Бандероль»
     cls: int = 0               # CLS_DRONE / CLS_MISSILE (0 — немає)
     prox: int = 0              # 0 — область/загально, 1 — місто/курс на місто/поруч, 2 — ваш район/над вами
     explicit: bool = False     # пост прямо про ваше місто/район/≤15 км (або балістика на область) — може дати
@@ -229,6 +231,8 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
         home = not remote
     ev = PostEval()
     t = fold(text)
+    if MKR_RE.search(text or ""):
+        t += "бандерол "         # «мКР» (малогабаритна КР «Бандероль»), регістр важливий: «мкр.» — мікрорайон
     ign = len(_any(t, RULES["ignore"]))
     if ign >= 2 or (ign >= 1 and len(t.encode()) > 350):
         ev.ignored = True
@@ -241,7 +245,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
 
     best, threat_w = threat_of(t)
     if best and best[1]["type"] == "ballistic" and CRUISE_RE.search(t) and not BALLISTIC_RE.search(t):
-        mis = next((th for th in RULES["threats"] if th["type"] == "missile"), None)
+        mis = next((th for th in RULES["threats"] if th["type"] == "missile" and not th.get("sub")), None)
         if mis:
             best = (2 if mis.get("level") == "red" else 1, mis)
     threat_label = best[1]["label"] if best else None
@@ -282,6 +286,7 @@ def analyze_post(text: str, city_id: str = None, district_id: str = None, remote
 
     places = find_places(t)
     ev.threat = best[1]["type"] if best else ""
+    ev.sub = best[1].get("sub", "") if best else ""
     obl_hit = bool(city and _any(t, OBLAST_KW.get(city["oblast"], [])))
     near_place = None
     if city:

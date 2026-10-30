@@ -192,7 +192,7 @@ def metrics(fc, out, sums, raw, split, hist_nodes, news):
         P = {}
         tr_pairs = [(fc[f]["p30"], out[f]["near"]) for f in out if f in fc and out[f].get("near") is not None and cond(fc[f]["t"])]
         P["track_p30"] = brier_block(tr_pairs)
-        for ty in ("shahed", "cruise", "kab", "jet", "recon", "unknown"):
+        for ty in ("shahed", "cruise", "banderol", "kab", "jet", "recon", "unknown"):
             pp = [(fc[f]["p30"], out[f]["near"]) for f in out if f in fc and out[f].get("near") is not None
                   and cond(fc[f]["t"]) and fc[f]["ty"] == ty]
             if pp:
