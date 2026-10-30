@@ -8,7 +8,8 @@
   • одне «живе» повідомлення на тривогу: мапа + текст редагуються кожні live_edit_s (10 с), якщо щось змінилось;
     підвищення рівня / «· ближче» → нове повідомлення (зі звуком), попереднє видаляється;
   • без повторів: той самий або нижчий рівень протягом debounce_min (10 хв) не надсилається вдруге;
-  • повернення до зеленого (стабільно clear_after_min хв) → усі повідомлення епізоду видаляються, лишається «🟢 Відбій»;
+  • офіційний відбій у районі (official_end у стані, ≥ official_clear_s) → «Відбій» одразу;
+    без нього — повернення до зеленого (стабільно clear_after_min хв) → усі повідомлення епізоду видаляються, лишається «🟢 Відбій»;
   • секрети TG_BOT_TOKEN / TG_CHAT_ID відсутні → модуль мовчки нічого не робить.
 Стан (останній надісланий рівень/час) — <out>/notify_state.json, переживає перезапуски live.yml через гілку data.
 """
@@ -54,12 +55,25 @@ SCOPE_RANK = {"oblast": 1, "raion": 2, "city": 3, "district": 4}
 RED_KINDS = ("ballistic", "missile", "kab", "aircraft", "Балістика", "Ракети", "КАБ", "Авіація")   # «Розвідник» — ні
 
 
-def decide(mem, level, now, cfg, key=None):
+def decide(mem, level, now, cfg, key=None, off_end=0, official=False):
     """mem — стан (змінюється на місці). → None | ("alert", level) | ("alert+", level) | ("clear", тривалість_с).
     key — (тип загрози, scope) поточного стану. «alert+» — уточнення без підвищення рівня: загроза наблизилась
     (scope «область» → «місто») або змінився тип червоної загрози (балістика → крилаті ракети). 30.10: о 05:32 надіслано
     «балістика на область», а о 05:56–05:59 «4–5 ракет на Кременчук» вже не надсилалось (рівень той самий)."""
     minl = LV.get(cfg.get("min_level", "orange"), 2)
+    # офіційний відбій у районі після початку епізоду (і рівень уже нижче порогу) — «Відбій» одразу, без clear_after_min.
+    # official_clear_s (15 с) — захист від миттєвого «мерехтіння» тривоги в джерелі (зміна типу загрози тощо)
+    if official:
+        mem.pop("off_end", None)            # тривога (знову) діє — старий відбій не рахується
+    elif off_end:
+        mem["off_end"] = off_end            # пам'ятаємо відбій і після AFTER_END_MIN (якщо свіжий пост тримав рівень)
+    off_end = mem.get("off_end") or 0
+    if (mem.get("active") and off_end and off_end > mem.get("since", 0) and level < minl
+            and now - off_end >= float(cfg.get("official_clear_s", 15))):
+        dur = now - (mem.get("since") or now)
+        mem.update(active=False, sent_level=0, green_since=0, since=0, sent_at=now, sent_key=None, sent_kinds=None)
+        mem.pop("off_end", None)
+        return ("clear", dur) if cfg.get("send_clear", True) else None
     deb = float(cfg.get("debounce_min", 10)) * 60
     clr = float(cfg.get("clear_after_min", 3)) * 60
     sent_lvl = mem.get("sent_level", 0)
@@ -478,7 +492,8 @@ class Notifier:
     # ---- логіка
     def _process(self, st, now):
         level = LV.get(st.get("final"), 0)
-        act = decide(self.mem, level, now, self.cfg, key=(st.get("kind") or "", st.get("scope") or ""))
+        act = decide(self.mem, level, now, self.cfg, key=(st.get("kind") or "", st.get("scope") or ""),
+                     off_end=st.get("official_end") or 0, official=bool(st.get("official")))
         res = None
         if self.sender:   # старий режим: лише надсилати
             if act and act[0] in ("alert", "alert+"):

@@ -7,6 +7,7 @@
  "photo": true,
  "debounce_min": 10,
  "clear_after_min": 3,
+ "official_clear_s": 15,
  "send_clear": true,
  "live_edit_s": 10
 }

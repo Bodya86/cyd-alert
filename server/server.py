@@ -134,6 +134,9 @@ def threat_line(final, scope, kind, city_name):
 trk_lock = threading.Lock()
 _prev_lvl = {}           # region idx → рівень (для alert_change)
 _jaam_ev_seen = 0.0
+_off_end = {}            # region idx → час кінця офіційної тривоги в районі (30.10: відбій у TG на 9 хв пізніше —
+                         # пост «балістика на область»/хвіст трекера тримали червоний ще 5,5 хв + 3 хв «стабільно зелений»)
+AFTER_END_MIN = float(os.environ.get("AFTER_END_MIN", "20"))   # скільки після відбою старі пости/трекер не піднімають вище жовтого
 CITY_BY_CHANNEL = {c["channel"].lower(): c for c in an.LOC["cities"] if c.get("channel")}
 for _c in an.CHANNELS_CFG:          # data/channels.json: «домашнє» місто каналу (для трекера); national → None
     _home = an.CITIES.get(_c.get("home")) if _c.get("home") else None
@@ -268,6 +271,10 @@ def feed_tracker_alerts(rs):
     with trk_lock:
         for i, c in enumerate(rs):
             L = 0 if c == "." else 1
+            if _prev_lvl.get(i, 0) and not L:
+                _off_end[i] = now            # офіційний відбій у районі
+            elif L:
+                _off_end.pop(i, None)
             if _prev_lvl and _prev_lvl.get(i, 0) != L:
                 trk.alert_change(i, L > 0, now)
             _prev_lvl[i] = L
@@ -551,6 +558,14 @@ def oblast_alert(rs, obl, oblast):
     return any(i < len(rs) and rs[i] != "." for i in REG_BY_OBLAST.get(oblast, []))
 
 
+def after_end(region, official, ev=None, best=None, now=None):
+    """→ час офіційного відбою у районі (якщо він був ≤ AFTER_END_MIN хв тому і тривога не відновилась) або 0."""
+    if official or region is None or region < 0:
+        return 0
+    end = _off_end.get(region) or 0
+    return end if end and (now or time.time()) - end < AFTER_END_MIN * 60 else 0
+
+
 def state(q):
     city = q.get("city") or None
     district = q.get("district") or None
@@ -593,6 +608,14 @@ def state(q):
         if obl_alert and p >= SCOPE_MIN_P[k]:   # без тривоги в області зона рівень не піднімає взагалі
             t_raw = max(t_raw, SCOPE_LVL[k])
     tlvl = an.cap_level(t_raw, obl_alert, False)   # прогноз трекера без тривоги в області — не вище жовтого
+    off_end = after_end(region, official, ev, best)
+    if off_end:
+        # офіційний відбій у вашому районі: старі пости («балістика на область», TTL 20 хв) і хвости трекера
+        # більше не тримають помаранчевий/червоний; підняти знову може лише новий (після відбою) пост прямо про місто
+        tlvl = min(tlvl, an.YELLOW)
+        if not (ev.explicit and int((best or {}).get("ts", 0)) > off_end):
+            lvl = min(lvl, an.YELLOW)
+            final = min(final, an.YELLOW)
     final = max(final, tlvl)
     scope = scope_of(q, ev, lvl, official, obl_alert, sp) if final > an.GREEN else ""
     scope_src = ("post" if lvl > an.GREEN and ev.scope == scope else
@@ -675,6 +698,7 @@ def state(q):
         "official": official,
         "official_level": an.LEVEL_NAMES[off_lvl],
         "official_partial": off_part,
+        "official_end": int(off_end),      # >0 — щойно був офіційний відбій у районі (Telegram: «Відбій» одразу)
         "kind": ev.kind,
         "near": ev.near,
         "region": region,
