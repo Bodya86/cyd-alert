@@ -54,6 +54,7 @@ EVENT_TYPES = ("ballistic", "kinzhal")    # без траєкторії — ап
 # апріорні P(у радіусі R) для події: свій район / своя область / місце < 150 км / далеке місце.
 # Далеке було 0.05: 3 репости «балістика на Київ» давали 1−0.95³ = 0.14 ≥ 0.10 → червоний у Кременчуці (аудит 30.10).
 EVENT_P = dict(raion=0.6, oblast=0.3, near=0.25, far=0.01)
+EVENT_CITY_SIGMA, EVENT_CITY_KM = 20.0, 50.0   # подія з названим містом далі за 50 км (інша область) — far
 # дублікати однієї цілі (асоціація не спрацювала) не множаться як незалежні: кластер того ж класу ближче DEDUP_KM
 # з курсом ±DEDUP_DEG → одна ціль (max p, max count). 0 — вимкнено.
 # Вимкнено: бектест 08–10.2026 (аудит 30.10) — сирий BSS кращий, але червоний на holdout рідше влучає (hit 0.307→0.283,
@@ -928,7 +929,11 @@ class Tracker:
                 p = EVENT_P["raion"]
             elif ob is not None and ob >= 0 and ob == user_oblast:
                 p = EVENT_P["oblast"]
-            elif place and math.hypot(*Proj(ulat, ulon).xy(place["lat"], place["lon"])) < 150:
+            elif place and math.hypot(*Proj(ulat, ulon).xy(place["lat"], place["lon"])) < 150 and not (
+                    place.get("name") and place.get("sigma", 99) <= EVENT_CITY_SIGMA
+                    and math.hypot(*Proj(ulat, ulon).xy(place["lat"], place["lon"])) > EVENT_CITY_KM):
+                # «балістика на Дніпро» (названe місто, σ ≤ 20 км) за > 50 км — ракета летить туди за хвилини, а не на вас:
+                # 30.10 20:01 така подія давала p_missile 0.25 і червоний у Кременчуці (135 км). Без міста — як раніше.
                 p = EVENT_P["near"]
             else:
                 p = EVENT_P["far"]

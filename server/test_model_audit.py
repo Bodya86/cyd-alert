@@ -180,3 +180,25 @@ class DistCalTest(unittest.TestCase):
         self.assertIsNone(tk.Tracker._obs_km(tr, 49.068, 33.42, now))
         tr.last_pos = [now - 60, 49.068, 33.92, 50.0]
         self.assertIsNone(tk.Tracker._obs_km(tr, 49.068, 33.42, now))
+
+
+class EventCityFarTest(unittest.TestCase):
+    """30.10 20:01: «балістика на Дніпро» (135 км, інша область) → p_missile 0.25 → червоний у Кременчуці."""
+
+    def _p(self, place):
+        t = tk.Tracker()
+        t.events = [(1000.0, "ballistic", 20, 3, place)]
+        ev = [d for d in t.assess(49.068, 33.42, now=1060.0, user_region=95, user_oblast=16) if d["src"] == ["event"]]
+        return ev[0]["p"][30]
+
+    def test_named_city_far(self):
+        self.assertEqual(self._p({"name": "дніпро", "lat": 48.464, "lon": 35.046, "oblast": 3, "region": 20, "sigma": 7.0}),
+                         tk.EVENT_P["far"])
+
+    def test_unnamed_near_kept(self):
+        self.assertEqual(self._p({"name": "", "lat": 48.464, "lon": 35.046, "oblast": 3, "region": 20, "sigma": 40.0}),
+                         tk.EVENT_P["near"])
+
+    def test_named_city_close(self):
+        self.assertEqual(self._p({"name": "світловодськ", "lat": 49.05, "lon": 33.24, "oblast": 10, "region": 40, "sigma": 7.0}),
+                         tk.EVENT_P["near"])
