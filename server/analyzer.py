@@ -41,6 +41,11 @@ RETRO_RE = re.compile(r"(ворог\w*|противник\w*|окупант\w*|�
                       r"використав|исползовал)")
 RETRO_HINT_RE = re.compile(r"\d|попередн|предварит|вранци|утром|вночи|ночю|вчора|вчера|минулои|прошлой")   # fold: ї→и (було «минулої» — не збігалось ніколи)
 RETRO_STRONG_RE = re.compile(r"[зс]бито\s*/\s*подавлено|\b(у|в) (нич|ноч) на \d|за (нич|ноч|добу|сутки) (ворог|противник|враг)")
+# минулий час про наслідки («Були сьогодні влучання російської балістики на Полтавщині. Кременчук», «Мішенню була…»,
+# «було 2 влучання») — звернення/новина, не ціль зараз (30.10 19:53: хибний червоний «Балістика» з репосту звернення
+# у poltavskaODA). Лише без маркерів «прямо зараз» (LIVE_NOW_RE). У прошивці — retroPast (analyzer.cpp).
+RETRO_PAST_RE = re.compile(r"(?<!\w)(були|було|був|была|были|было)\s+(\w+\s+){0,2}(влучан|попадан|прилит|прилет|прилот|удар|уражен|поражен)|"
+                           r"(?<!\w)(мишенн?ю|целю|циллю)\s+(була|був|були|было|был|стал)")
 LIVE_RE = re.compile(r"курс|пидлит|подлет|пидлот|летит|летят|укрит|напрям|направлен|загроз|угроз|тривог|тревог|"
                      r"вибух|взрив|ппо|зараз|сейчас|работа|працю")
 MKR_RE = re.compile(r"(?<![\w-])(мКР|МКР)(?![\w.-])")
@@ -70,7 +75,8 @@ def is_forecast(t):
 
 def is_report(t):
     """Пост-підсумок постфактум (fold-текст)."""
-    return bool(RETRO_STRONG_RE.search(t)) or (bool(RETRO_RE.search(t)) and bool(RETRO_HINT_RE.search(t)) and not LIVE_RE.search(t))
+    return (bool(RETRO_STRONG_RE.search(t)) or (bool(RETRO_RE.search(t)) and bool(RETRO_HINT_RE.search(t)) and not LIVE_RE.search(t))
+            or (bool(RETRO_PAST_RE.search(t)) and not LIVE_NOW_RE.search(t)))
 LOC = _load("locations.json")
 CHANNELS_CFG = _load("channels.json")["channels"]
 CHANNELS_CFG_PRIOR = [dict(c) for c in CHANNELS_CFG]     # ручні ваги (апріорні для tools/channel_reliability.py)

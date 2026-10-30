@@ -158,8 +158,15 @@ def _threat(st):
     else:
         k = (st.get("kind") or "").strip()
         name = KIND_SHORT.get(k, k or "Дрони — Шахед/БпЛА")
-    n = sum(int(t.get("n") or 1) for t in (st.get("tgt") or []))
+    # ×N — лише цілі того ж класу, що в заголовку (30.10: «Балістика ×6» рахувала 1 балістичну + 5 дронів по всій мапі)
+    nl = name.lower()
+    codes = next((c for k, c in THREAT_CODES if k in nl), None)
+    n = sum(int(t.get("n") or 1) for t in (st.get("tgt") or []) if codes and (t.get("k") or t.get("c")) in codes)
     return name + (f" ×{n}" if n > 1 else "")
+
+
+THREAT_CODES = (("балісти", "BZ"), ("дрон", "SGJLD"), ("шахед", "SGJLD"), ("бпла", "SGJLD"), ("ракет", "CNX"),
+                ("кр ", "CNX"), ("каб", "K"))
 
 
 def alert_text(st, level, cfg, update=False):
@@ -198,6 +205,19 @@ def _geo():
         except (OSError, ValueError, KeyError):
             _GEO = []
     return _GEO
+
+
+def map_title(st, level, cfg):
+    """Шапка мапи — лише факти (zone). «ЧИСТО» — тільки коли загроз немає зовсім (30.10: live-повідомлення,
+    відредаговане на жовтому рівні, мало шапку «ЧИСТО» при «Дрони у районі ×6» у тексті)."""
+    if level <= 0:
+        head = "ЧИСТО"
+    elif level == 1:
+        head = "ЗАГРОЗА В ОБЛАСТІ"
+    else:
+        z = st.get("zone") or ({3: "district", 2: "course"}.get(level) if st.get("scope") in ("city", "district") else "obl")
+        head = ZONE_HEAD.get(z) or "ЗАГРОЗА В ОБЛАСТІ"
+    return head + " · " + (cfg.get("label") or "")
 
 
 def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
@@ -311,11 +331,9 @@ def render_map(st, ulat, ulon, level, cfg, W=800, H=600):
     dr.ellipse([x - 4 * S, y - 4 * S, x + 4 * S, y + 4 * S], fill=(255, 255, 255))
 
     # шапка
-    bar = {2: (255, 140, 26), 3: (229, 72, 77)}.get(level, (46, 160, 67))
+    bar = {1: (250, 204, 21), 2: (255, 140, 26), 3: (229, 72, 77)}.get(level, (46, 160, 67))
     dr.rectangle([0, 0, w, 44 * S], fill=bar)
-    z = st.get("zone") or ({3: "district", 2: "course"}.get(level) if st.get("scope") in ("city", "district") else "obl")
-    head = ZONE_HEAD.get(z) or "ЗАГРОЗА В ОБЛАСТІ"
-    title = (head if level >= 2 else "ЧИСТО") + " · " + (cfg.get("label") or "")
+    title = map_title(st, level, cfg)
     dr.text((14 * S, 8 * S), title, font=font(22, True), fill=(11, 15, 20))
     img = img.resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()
@@ -455,13 +473,13 @@ class Notifier:
             return None, None
 
     def _delete(self, mid):
+        """→ True — повідомлення вже немає (видалено / не знайдено / старше 48 год); False — спробувати пізніше.
+        30.10: мережеві збої (TgError 0 / 5xx) вважались успіхом — id випадав з епізоду, а повідомлення лишалось сиротою."""
         try:
             self._api("deleteMessage", {"message_id": mid})
             return True
         except TgError as e:
-            if e.code == 429:
-                return False
-            return True   # уже видалене / старше 48 год — більше не пробуємо
+            return e.code in (400, 403) and e.code != 429
 
     def _edit(self, st, level, text, sig, now=None):
         """Оновити live-повідомлення. → True (оновлено/без змін) | False (спробувати пізніше) | None (зникло)."""
@@ -529,10 +547,14 @@ class Notifier:
             for mid in list(ep):
                 if not self._delete(mid):
                     left.append(mid)
-            self.mem["episode"] = left
             self.mem["live"] = None
             r, _ = self._send_new(clear_text(self.cfg, act[1]), None)
-            _log(f"відбій: {'надіслано' if r else 'НЕ надіслано'}; видалено {len(ep) - len(left)}, лишилось {len(left)}")
+            # попередні «Відбій» теж прибираємо: у чаті лишається один — останній (30.10)
+            left += [m for m in self.mem.get("clears", []) if not self._delete(m)]
+            self.mem["episode"] = left
+            self.mem["clears"] = [r] if r else []
+            _log(f"відбій: {'надіслано' if r else 'НЕ надіслано'}; видалено {len(ep) - len([m for m in left if m in ep])}, "
+                 f"лишилось {len(left)}")
             res = "clear"
         elif self.mem.get("active") and (self.mem.get("live") or {}).get("id") and level >= 1:
             lv = self.mem["live"]
@@ -541,7 +563,7 @@ class Notifier:
                 sig = live_sig(st, level, text)
                 if sig != lv.get("sig"):
                     r = self._edit(st, level, text, sig, now)
-                    if r is None:   # повідомлення видалили вручну — нове, без звуку
+                    if r is None:   # повідомлення видалили вручну / не редагується — нове, без звуку (старе дочистить gc)
                         mid, kind = self._send_new(text, self._png(st, level), silent=True)
                         if mid:
                             ep.append(mid)
@@ -550,8 +572,14 @@ class Notifier:
                         res = "edit"
                 else:
                     lv["at"] = now
-        elif not self.mem.get("active") and ep:   # хвости (429 при відбої) — дочищаємо
-            self.mem["episode"] = [m for m in ep if not self._delete(m)]
+        live_id = (self.mem.get("live") or {}).get("id")
+        stale = [m for m in ep if m != live_id]
+        if stale and act is None and now - self.mem.get("gc_at", 0) >= 30:
+            # хвости (429 / мережевий збій при відбої чи заміні live) — дочищаємо, і під час тривоги теж:
+            # у чаті завжди одне повідомлення тривоги (30.10: лишалось старе з шапкою «ЧИСТО»)
+            self.mem["gc_at"] = now
+            gone = [m for m in stale if self._delete(m)]
+            self.mem["episode"] = [m for m in ep if m not in gone]
         self.mem["level"] = level
         self._save()
         return res

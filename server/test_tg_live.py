@@ -88,7 +88,7 @@ class LiveTest(unittest.TestCase):
         a.fail["editMessageText"] = [tn.TgError(400, "Bad Request: message to edit not found")]
         n2.tick(now=1060, st=st("orange", pn=80))                          # зникло → нове без звуку
         self.assertEqual(a.m("sendMessage")[-1][1].get("disable_notification"), "true")
-        self.assertEqual(len(n2.mem["episode"]), 2)
+        self.assertEqual(n2.mem["episode"], [n2.mem["live"]["id"]])        # старе — прибрано (gc), лишається одне
         n2.tick(now=1100, st=st("green", tgt=[]))
         n2.tick(now=1300, st=st("green", tgt=[]))
         self.assertEqual(n2.mem["episode"], [])
@@ -105,6 +105,63 @@ class LiveTest(unittest.TestCase):
         n.tick(now=1022, st=st("orange", pn=50, tgt=[{"k": "S", "la": 49.1, "lo": 33.7, "hd": 250}]))   # мапа
         self.assertEqual(len(self.api.m("editMessageMedia")), 1)
         self.assertIn("attach://map", self.api.m("editMessageMedia")[0][1]["media"])
+
+
+class OrphanTest(unittest.TestCase):
+    """30.10 19:56: у чаті лишилось старе повідомлення тривоги (шапка «ЧИСТО», edited 18:03) поряд з новим, і старі «Відбій»."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.api = FakeApi()
+        self.n = tn.Notifier(self.d, CFG, token="x", chat="1", api=self.api)
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_delete_network_error_not_lost(self):
+        n, a = self.n, self.api
+        n.tick(now=1000, st=st("orange"))
+        old = n.mem["live"]["id"]
+        a.fail["deleteMessage"] = [tn.TgError(0, "URLError")]            # мережевий збій при заміні live
+        n.tick(now=1100, st=st("red", scope="district"))
+        self.assertIn(old, a.alive)
+        self.assertIn(old, n.mem["episode"])                              # не загублено
+        n.tick(now=1140, st=st("red", scope="district"))                  # gc під час тривоги
+        self.assertNotIn(old, a.alive)
+        self.assertEqual(n.mem["episode"], [n.mem["live"]["id"]])
+        self.assertEqual(len(a.alive), 1)                                 # у чаті одне повідомлення тривоги
+
+    def test_delete_definitive_errors(self):
+        a = self.api
+        a.fail["deleteMessage"] = [tn.TgError(400, "Bad Request: message to delete not found")]
+        self.assertTrue(self.n._delete(5))
+        a.fail["deleteMessage"] = [tn.TgError(502, "Bad Gateway")]
+        self.assertFalse(self.n._delete(5))
+        a.fail["deleteMessage"] = [tn.TgError(0, "timeout")]
+        self.assertFalse(self.n._delete(5))
+
+    def test_previous_clear_deleted(self):
+        n, a = self.n, self.api
+        for t0 in (1000, 5000):
+            n.tick(now=t0, st=st("orange"))
+            n.tick(now=t0 + 10, st=st("green", tgt=[]))
+            self.assertEqual(n.tick(now=t0 + 200, st=st("green", tgt=[])), "clear")
+        self.assertEqual(len(a.alive), 1)                                 # лише останній «Відбій»
+        self.assertIn("Відбій", [c for c in a.m("sendMessage")][-1][1]["text"])
+
+    def test_title_not_clean_with_threats(self):
+        cfg = {"label": "Кременчук"}
+        self.assertTrue(tn.map_title({"zone": "oblast"}, 1, cfg).startswith("ЗАГРОЗА В ОБЛАСТІ"))
+        self.assertTrue(tn.map_title({}, 0, cfg).startswith("ЧИСТО"))
+        self.assertTrue(tn.map_title({"zone": "district"}, 3, cfg).startswith("ЗАГРОЗА В РАЙОНІ"))
+        self.assertTrue(tn.map_title({"zone": "course"}, 2, cfg).startswith("КУРС НА МІСТО"))
+
+    def test_threat_count_same_class(self):
+        s = {"thr": "Балістика · загроза вашому району",
+             "tgt": [{"k": "B", "n": 1}] + [{"k": "S", "n": 1}] * 3 + [{"k": "J", "n": 2}]}
+        self.assertEqual(tn._threat(s), "Балістика")                     # не «×6»
+        s["thr"] = "Дрони · загроза в області"
+        self.assertEqual(tn._threat(s), "Дрони ×5")
 
 
 if __name__ == "__main__":

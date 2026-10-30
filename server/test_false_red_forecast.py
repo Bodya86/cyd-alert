@@ -68,3 +68,28 @@ class FalseRedForecast(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FalseRedRetroAddress(unittest.TestCase):
+    """30.10 19:53: poltavskaODA репостнула вечірнє звернення («Були сьогодні влучання російської балістики на Полтавщині.
+    Кременчук. Мішенню була наша нафтопереробна інфраструктура») → «Балістика, місто», червоний без тривоги."""
+    TXT = ("Сьогодні увесь день в Дніпрі, в Києві та області, в інших наших містах та громадах працюють енергетики. "
+           "Були сьогодні влучання російської балістики на Полтавщині. Кременчук. Мішенню була наша нафтопереробна "
+           "інфраструктура. Росіяни не зробили жодного кроку деескалації в енергетиці.")
+
+    def test_ignored(self):
+        for d in (None, "center"):
+            e = an.analyze_post(self.TXT, "kremenchuk", d, False, False)
+            self.assertTrue(e.ignored, e)
+            self.assertEqual(e.level, an.GREEN)
+
+    def test_variants(self):
+        for t in ("У Лубнах було 2 влучання, цілеспрямований удар по місту.",
+                  "Знову мішенню були енергетика та інфраструктура"):
+            self.assertTrue(an.is_report(an.fold(t)), t)
+
+    def test_live_kept(self):
+        for t in ("Балістика на Кременчук! Були вибухи, в укриття", "Шахед курсом на Кременчук",
+                  "Балістика на Кременчук"):
+            self.assertFalse(an.is_report(an.fold(t)), t)
+            self.assertGreaterEqual(an.analyze_post(t, "kremenchuk", "center").level, an.ORANGE, t)

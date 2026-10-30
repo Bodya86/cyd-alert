@@ -260,8 +260,39 @@ static bool retroLive(const char* t) {
   for (auto l : L) if (strstr(t, l)) return true;
   return false;
 }
+// минулий час про наслідки («були сьогодні влучання…», «мішенню була…») без маркерів «зараз» (= server RETRO_PAST_RE, 30.10)
+static bool wsC(char c) { return c == ' ' || c == '\n' || c == '\t' || c == '\r'; }
+static bool retroPast(const char* t) {
+  static const char* const AUX[] = {"були", "було", "був", "была", "были", "было"};
+  static const char* const HIT[] = {"влучан", "попадан", "прилит", "прилет", "прилот", "удар", "уражен", "поражен"};
+  static const char* const TGT[] = {"мишенню", "мишеню", "целю", "циллю"};
+  static const char* const TV[] = {"була", "був", "були", "было", "был", "стал"};
+  for (auto a : AUX)
+    for (const char* p = strstr(t, a); p; p = strstr(p + 1, a)) {
+      if (p > t && isWB((unsigned char)p[-1])) continue;
+      const char* q = p + strlen(a);
+      if (!wsC(*q)) continue;
+      q = skipWS(q);
+      for (int k = 0; k <= 2; k++) {                 // \s+(\w+\s+){0,2}HIT
+        if (startsAny(q, HIT, 8)) return true;
+        const char* w = q;
+        while (*w && isWB((unsigned char)*w)) w++;
+        if (w == q || !wsC(*w)) break;
+        q = skipWS(w);
+      }
+    }
+  for (auto g : TGT)
+    for (const char* p = strstr(t, g); p; p = strstr(p + 1, g)) {
+      if (p > t && isWB((unsigned char)p[-1])) continue;
+      const char* q = p + strlen(g);
+      if (!wsC(*q)) continue;
+      if (startsAny(skipWS(q), TV, 6)) return true;
+    }
+  return false;
+}
 bool isReportPost(const char* folded) {
-  return retroStrong(folded) || (retroSubjVerb(folded) && retroHint(folded) && !retroLive(folded));
+  return retroStrong(folded) || (retroSubjVerb(folded) && retroHint(folded) && !retroLive(folded)) ||
+         (retroPast(folded) && !liveNow(folded));
 }
 // (fold: ь прибрано, ї→и — тому «ноч», «ночю», «минулои»)
 // «мКР»/«МКР» (малогабаритна КР «Бандероль»), регістр важливий: «мкр.» — мікрорайон (= server MKR_RE)

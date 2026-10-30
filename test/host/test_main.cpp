@@ -80,6 +80,12 @@ int main(int argc, char** argv) {
     e = analyzePost("Ворог атакував Кременчук 2 ракетами, ще підльот", k, -1, false, 1);
     check(!e.ignored, "pidlot is live");
     check(isReportPost(" за нич ворог застосував 9 ракет ") && !isReportPost(" ракета на кременчук "), "isReportPost");
+    // 30.10 19:53: репост звернення «Були сьогодні влучання російської балістики на Полтавщині. Кременчук» → хибний червоний
+    e = analyzePost("Були сьогодні влучання російської балістики на Полтавщині. Кременчук. Мішенню була нафтопереробна інфраструктура.", k, -1, false, 1);
+    check(e.ignored, "retro past: buly vluchannia");
+    check(isReportPost(" у лубнах було 2 влучання ") && isReportPost(" мишенню була енергетика "), "retroPast");
+    e = analyzePost("Балістика на Кременчук! Були вибухи, в укриття", k, -1, false, 1);
+    check(!e.ignored && e.level == LVL_RED, "retro past with live marker stays live");
     // «мКР» — малогабаритна КР (ракета), «мкр.» — мікрорайон
     e = analyzePost("❗️2 мКР на Кременчук", k, -1, false, 1);
     check(e.level == LVL_RED, "mKR is missile");
